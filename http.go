@@ -7,7 +7,10 @@ import (
 	"github.com/frankli0324/go-http/internal/model"
 )
 
-type Header = http.Header
 type Client = internal.Client
+type Header = http.Header
 type Request = model.Request
-type Middleware = model.Middleware
+type PreparedRequest = model.PreparedRequest
+type Response = model.Response
+
+type Middleware = internal.Middleware

@@ -11,7 +11,6 @@ import (
 	"strings"
 
 	"github.com/frankli0324/go-http/internal/model"
-	"github.com/frankli0324/go-http/internal/prepare"
 	"github.com/frankli0324/go-http/internal/transport/chunked"
 )
 
@@ -25,7 +24,7 @@ func (b bodyCloser) Close() error { return b.close() }
 type http1 struct {
 }
 
-func (t *http1) Write(w io.Writer, r *prepare.PreparedRequest) error {
+func (t *http1) Write(w io.Writer, r *model.PreparedRequest) error {
 	body, err := r.GetBody() // can write body
 	if err != nil {
 		return err
@@ -53,7 +52,7 @@ func (t *http1) Write(w io.Writer, r *prepare.PreparedRequest) error {
 //	Host: www.google.com\r\n
 //	X-Xx-Yy: cccccc\r\n
 //	\r\n
-func (t *http1) writeHeader(w io.Writer, r *prepare.PreparedRequest) error {
+func (t *http1) writeHeader(w io.Writer, r *model.PreparedRequest) error {
 	header := bufio.NewWriter(w) // default bufsize is 4096
 
 	if _, err := header.WriteString(r.Method); err != nil {

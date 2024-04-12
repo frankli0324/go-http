@@ -1,4 +1,4 @@
-package prepare
+package model
 
 import (
 	"bytes"
@@ -9,12 +9,10 @@ import (
 	"strconv"
 	"strings"
 	"sync/atomic"
-
-	"github.com/frankli0324/go-http/internal/model"
 )
 
 type PreparedRequest struct {
-	*model.Request
+	*Request
 
 	U          *url.URL
 	GetBody    func() (io.ReadCloser, error)
@@ -24,7 +22,7 @@ type PreparedRequest struct {
 	ContentLength int64
 }
 
-func Prepare(r *model.Request) (*PreparedRequest, error) {
+func (r *Request) Prepare() (*PreparedRequest, error) {
 	u, err := url.Parse(r.URL)
 	if err != nil {
 		return nil, err

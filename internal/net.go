@@ -6,7 +6,6 @@ import (
 	"io"
 	"net"
 
-	"github.com/frankli0324/go-http/internal/prepare"
 	"github.com/frankli0324/go-http/netpool"
 )
 
@@ -17,7 +16,7 @@ var schemes = map[string]string{
 
 var zeroDialer net.Dialer
 
-func defaultDial(ctx context.Context, r *prepare.PreparedRequest) (io.ReadWriteCloser, error) {
+func defaultDial(ctx context.Context, r *PreparedRequest) (io.ReadWriteCloser, error) {
 	hp := r.U.Host
 	if r.U.Port() == "" {
 		hp = r.U.Hostname() + schemes[r.U.Scheme]

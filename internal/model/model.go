@@ -1,13 +1,9 @@
 package model
 
 import (
-	"context"
 	"io"
 	"net/http"
 )
-
-type Handler = func(ctx context.Context) error
-type Middleware func(next Handler) Handler
 
 type Request struct {
 	Method string
