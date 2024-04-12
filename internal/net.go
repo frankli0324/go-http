@@ -26,6 +26,12 @@ var defaultDialer = &CoreDialer{
 	},
 }
 
+func (d *CoreDialer) Clone() Dialer {
+	return &CoreDialer{
+		TLSConfig: d.TLSConfig,
+	}
+}
+
 func (d *CoreDialer) Unwrap() Dialer {
 	return nil
 }

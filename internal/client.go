@@ -10,17 +10,13 @@ import (
 
 type PreparedRequest = model.PreparedRequest
 
-type Handler = func(ctx context.Context, req *PreparedRequest) (*model.Response, error)
-type Middleware func(next Handler) Handler
-
 type Dialer interface {
 	Dial(ctx context.Context, r *PreparedRequest) (io.ReadWriteCloser, error)
 	Unwrap() Dialer
 }
 
 type Client struct {
-	middlewares []Middleware
-	dialer      Dialer
+	dialer Dialer
 }
 
 // UseDialer provides the interface to modify the dialer used for
@@ -38,7 +34,7 @@ func (c *Client) UseDialer(wrap func(Dialer) Dialer) {
 	if c.dialer != nil {
 		c.dialer = wrap(c.dialer)
 	} else {
-		c.dialer = wrap(defaultDialer)
+		c.dialer = wrap(defaultDialer.Clone())
 	}
 }
 
@@ -64,25 +60,19 @@ func (c *Client) CtxDo(ctx context.Context, req *model.Request) (*model.Response
 	if err != nil {
 		return nil, err
 	}
-	next := func(ctx context.Context, req *PreparedRequest) (*model.Response, error) {
-		conn, err := c.dial(ctx, pr)
-		if err != nil {
-			return nil, err
-		}
-		proto := ""
-		if tls := getTLSConn(conn); tls != nil {
-			proto = tls.ConnectionState().NegotiatedProtocol
-		}
-		tr := c.transport(proto)
-		if err := tr.Write(conn, pr); err != nil {
-			return nil, err
-		} else {
-			resp := &model.Response{}
-			return resp, tr.Read(conn, resp)
-		}
+	conn, err := c.dial(ctx, pr)
+	if err != nil {
+		return nil, err
 	}
-	for i := len(c.middlewares) - 1; i > 1; i-- {
-		next = c.middlewares[i](next)
+	proto := ""
+	if tls := getTLSConn(conn); tls != nil {
+		proto = tls.ConnectionState().NegotiatedProtocol
 	}
-	return next(ctx, pr)
+	tr := c.transport(proto)
+	if err := tr.Write(conn, pr); err != nil {
+		return nil, err
+	} else {
+		resp := &model.Response{}
+		return resp, tr.Read(conn, resp)
+	}
 }
