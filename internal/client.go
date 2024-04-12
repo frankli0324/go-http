@@ -30,6 +30,9 @@ type Client struct {
 // their own [Dialer], however not necessary. Users could
 // get the underlying default [CoreDialer] and modify
 // the default logic by [Dialer.Unwrap]ping the given dialer.
+//
+// For example, http2 can be disabled by removing the "h2" from
+// tls ALPN. See how it is be done in [Client.DisableH2].
 func (c *Client) UseDialer(wrap func(Dialer) Dialer) {
 	if c.dialer != nil {
 		c.dialer = wrap(c.dialer)
