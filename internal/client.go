@@ -23,11 +23,17 @@ type Client struct {
 	dialer      Dialer
 }
 
-// Use appends mw to the end of the chain. The last "Use"d mw executes first
-func (c *Client) Use(mws ...Middleware) {
-	c.middlewares = append(c.middlewares, mws...)
-}
-
+// UseDialer provides the interface to modify the dialer used for
+// setting up the underlying connections that a request is sent to
+// and a response is read from. Connection pooling should be
+// implemented at this layer.
+//
+// This package provides a default dialer type [CoreDialer], which
+// uses the pooling logic in the package [netpool]. Users are
+// encouraged to re-use the package if they needed to implement
+// their own [Dialer], however not necessary. Users could
+// get the underlying default [CoreDialer] and modify
+// the default logic by [Dialer.Unwrap]ping the given dialer.
 func (c *Client) UseDialer(wrap func(Dialer) Dialer) {
 	if c.dialer != nil {
 		c.dialer = wrap(c.dialer)
