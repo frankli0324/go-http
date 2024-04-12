@@ -17,8 +17,8 @@ func (r releaser) Close() error {
 	return nil
 }
 
-func (r releaser) Release() {
-	r.p.Release(r.conn)
+func (r releaser) Raw() net.Conn {
+	return r.conn.conn
 }
 
 type connPool struct {

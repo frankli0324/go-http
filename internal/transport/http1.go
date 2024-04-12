@@ -14,17 +14,9 @@ import (
 	"github.com/frankli0324/go-http/internal/transport/chunked"
 )
 
-type bodyCloser struct {
-	io.Reader
-	close func() error
-}
+type HTTP1 struct{}
 
-func (b bodyCloser) Close() error { return b.close() }
-
-type http1 struct {
-}
-
-func (t *http1) Write(w io.Writer, r *model.PreparedRequest) error {
+func (t *HTTP1) Write(w io.Writer, r *model.PreparedRequest) error {
 	body, err := r.GetBody() // can write body
 	if err != nil {
 		return err
@@ -52,7 +44,7 @@ func (t *http1) Write(w io.Writer, r *model.PreparedRequest) error {
 //	Host: www.google.com\r\n
 //	X-Xx-Yy: cccccc\r\n
 //	\r\n
-func (t *http1) writeHeader(w io.Writer, r *model.PreparedRequest) error {
+func (t *HTTP1) writeHeader(w io.Writer, r *model.PreparedRequest) error {
 	header := bufio.NewWriter(w) // default bufsize is 4096
 
 	if _, err := header.WriteString(r.Method); err != nil {
@@ -92,7 +84,14 @@ func (t *http1) writeHeader(w io.Writer, r *model.PreparedRequest) error {
 	return nil
 }
 
-func (t *http1) Read(r io.Reader, resp *model.Response) (err error) {
+type bodyCloser struct {
+	io.Reader
+	close func() error
+}
+
+func (b bodyCloser) Close() error { return b.close() }
+
+func (t *HTTP1) Read(r io.Reader, resp *model.Response) (err error) {
 	closer := io.NopCloser
 	if cr, ok := r.(io.Closer); ok {
 		closer = func(r io.Reader) io.ReadCloser { return bodyCloser{r, cr.Close} }
@@ -140,7 +139,7 @@ func (t *http1) Read(r io.Reader, resp *model.Response) (err error) {
 	return t.readTransfer(tp.R, resp, closer)
 }
 
-func (t *http1) readTransfer(r io.Reader, resp *model.Response, closer func(io.Reader) io.ReadCloser) error {
+func (t *HTTP1) readTransfer(r io.Reader, resp *model.Response, closer func(io.Reader) io.ReadCloser) error {
 	contentLens := resp.Header["Content-Length"]
 
 	// Hardening against HTTP request smuggling, taken from standard library
@@ -170,9 +169,6 @@ func (t *http1) readTransfer(r io.Reader, resp *model.Response, closer func(io.R
 	}
 
 	if resp.Header.Get("Transfer-Encoding") == "chunked" {
-		d, _ := r.(*bufio.Reader).Peek(10)
-		fmt.Println(string(d))
-
 		resp.Body = closer(chunked.NewChunkedReader(r))
 		return nil
 	}
