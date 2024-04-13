@@ -5,6 +5,7 @@ import (
 	"io"
 	"net"
 	"sync"
+	"time"
 )
 
 type releaser struct {
@@ -12,9 +13,12 @@ type releaser struct {
 	*conn
 }
 
-func (r releaser) Close() error {
+func (r releaser) Release() {
 	r.p.Release(r.conn)
-	return nil
+}
+
+func (r releaser) Close() error {
+	return r.conn.Close()
 }
 
 func (r releaser) Raw() net.Conn {
@@ -25,6 +29,7 @@ type connPool struct {
 	sync.Mutex
 	connTicket, idleTicket chan interface{}
 	idle                   []*conn
+	maxIdleDuration        time.Duration
 
 	dialer func(ctx context.Context) (net.Conn, error)
 }
@@ -46,7 +51,9 @@ func (p *connPool) Connect(ctx context.Context) (io.ReadWriteCloser, error) {
 			c := p.idle[0]
 			p.idle = p.idle[1:]
 			p.Unlock()
-			if !c.IsClosed.Load() {
+			if p.maxIdleDuration != 0 && time.Since(c.LastIdle) > p.maxIdleDuration {
+				c.Close()
+			} else if !c.IsClosed.Load() {
 				return releaser{p, c}, nil
 			}
 		default:
@@ -62,6 +69,7 @@ func (p *connPool) Release(c *conn) {
 		select {
 		case p.idleTicket <- nil:
 			p.Lock()
+			c.LastIdle = time.Now()
 			p.idle = append(p.idle, c)
 			p.Unlock()
 		default:

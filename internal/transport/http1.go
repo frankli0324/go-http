@@ -84,16 +84,17 @@ func (t *HTTP1) writeHeader(w io.Writer, r *model.PreparedRequest) error {
 	return nil
 }
 
-type bodyCloser struct {
-	io.Reader
-	close func() error
-}
-
-func (b bodyCloser) Close() error { return b.close() }
-
-func (t *HTTP1) Read(r io.Reader, resp *model.Response) (err error) {
+func (t *HTTP1) Read(r io.Reader, req *model.PreparedRequest, resp *model.Response) (err error) {
 	closer := io.NopCloser
-	if cr, ok := r.(io.Closer); ok {
+	if cr, ok := r.(Releaser); ok {
+		closer = func(r io.Reader) io.ReadCloser {
+			return bodyCloser{r, func() error {
+				cr.Release()
+				return nil
+			}}
+		}
+	}
+	if cr, ok := r.(io.Closer); ok && req.Header.Get("Connection") == "close" {
 		closer = func(r io.Reader) io.ReadCloser { return bodyCloser{r, cr.Close} }
 	}
 	tp := textproto.NewReader(bufio.NewReader(r))
@@ -135,6 +136,10 @@ func (t *HTTP1) Read(r io.Reader, resp *model.Response) (err error) {
 		}
 	}
 	resp.Header = http.Header(mimeHeader)
+
+	if cr, ok := r.(io.Closer); ok && resp.Header.Get("Connection") == "close" {
+		closer = func(r io.Reader) io.ReadCloser { return bodyCloser{r, cr.Close} }
+	}
 
 	return t.readTransfer(tp.R, resp, closer)
 }

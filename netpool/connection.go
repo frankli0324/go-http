@@ -5,11 +5,13 @@ import (
 	"log"
 	"net"
 	"sync/atomic"
+	"time"
 )
 
 type conn struct {
 	conn     net.Conn
 	IsClosed atomic.Bool
+	LastIdle time.Time
 }
 
 func (c *conn) Write(p []byte) (n int, err error) {

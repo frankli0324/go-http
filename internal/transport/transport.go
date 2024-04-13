@@ -7,6 +7,6 @@ import (
 )
 
 type Transport interface {
-	Read(r io.Reader, resp *model.Response) error
+	Read(r io.Reader, req *model.PreparedRequest, resp *model.Response) error
 	Write(w io.Writer, req *model.PreparedRequest) error
 }

@@ -76,6 +76,6 @@ func (c *Client) CtxDo(ctx context.Context, req *model.Request) (*model.Response
 		return nil, err
 	} else {
 		resp := &model.Response{}
-		return resp, tr.Read(conn, resp)
+		return resp, tr.Read(conn, pr, resp)
 	}
 }
