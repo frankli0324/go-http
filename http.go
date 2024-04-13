@@ -15,7 +15,6 @@ type Header = http.Header
 // of a HTTP request. A request would be "prepared" into *[PreparedRequest]s
 // to be actually written into an underlying connection (i.e. a TCP stream)
 type Request = model.Request
-type PreparedRequest = model.PreparedRequest
 
 // Responses are high-level representations of a HTTP response.
 type Response = model.Response
