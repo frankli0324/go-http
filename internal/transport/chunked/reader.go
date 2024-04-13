@@ -6,12 +6,6 @@ import (
 	"io"
 )
 
-type chunkedReader struct {
-	*bufio.Reader
-	currentChunk                   io.Reader
-	currentCount, currentChunkSize int64
-}
-
 func NewChunkedReader(r io.Reader) io.Reader {
 	var br *bufio.Reader
 	if v, ok := r.(*bufio.Reader); ok {
@@ -20,6 +14,12 @@ func NewChunkedReader(r io.Reader) io.Reader {
 		br = bufio.NewReader(r)
 	}
 	return &chunkedReader{br, nil, 0, 0}
+}
+
+type chunkedReader struct {
+	*bufio.Reader
+	currentChunk                   io.Reader
+	currentCount, currentChunkSize int64
 }
 
 func (c *chunkedReader) readChunkHeader() (len uint64, err error) {

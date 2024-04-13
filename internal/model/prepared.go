@@ -2,6 +2,7 @@ package model
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -54,16 +55,16 @@ func (r *Request) Prepare() (*PreparedRequest, error) {
 	}
 
 	pr := &PreparedRequest{
-		Request: r,
-
-		U:             u,
-		Header:        headers,
-		HeaderHost:    host,
+		Request: r, U: u,
+		Header: headers, HeaderHost: host,
 		ContentLength: cl,
 	}
 	if err := pr.updateBody(); err != nil {
 		// note that updateBody potentially updates content-length
 		return nil, err
+	}
+	if cl != -1 && pr.ContentLength != cl {
+		return nil, errors.New("conflicting value between body size and content-length request header")
 	}
 	return pr, nil
 }
@@ -77,15 +78,16 @@ func (r *PreparedRequest) updateBody() (err error) {
 		return nil
 	}
 	switch b := r.Request.Body.(type) {
-	case io.ReadCloser:
-		once := atomic.Bool{}
+	case string:
+		r.ContentLength = int64(len(b))
 		r.GetBody = func() (io.ReadCloser, error) {
-			if once.CompareAndSwap(false, true) {
-				return b, nil
-			}
-			return nil, http.ErrBodyReadAfterClose
+			return io.NopCloser(strings.NewReader(b)), nil
 		}
-		// unknown content-length
+	case []byte:
+		r.ContentLength = int64(len(b))
+		r.GetBody = func() (io.ReadCloser, error) {
+			return io.NopCloser(bytes.NewReader(b)), nil
+		}
 	case *bytes.Buffer: // below is taken from http.NewRequest
 		r.ContentLength = int64(b.Len())
 		buf := b.Bytes()
@@ -106,15 +108,20 @@ func (r *PreparedRequest) updateBody() (err error) {
 			r := snapshot
 			return io.NopCloser(&r), nil
 		}
-	case string:
-		r.ContentLength = int64(len(b))
-		r.GetBody = func() (io.ReadCloser, error) {
-			return io.NopCloser(strings.NewReader(b)), nil
+	case io.Reader:
+		if sizer, ok := b.(interface{ Size() int64 }); ok {
+			r.ContentLength = sizer.Size()
 		}
-	case []byte:
-		r.ContentLength = int64(len(b))
+		cb, ok := b.(io.ReadCloser)
+		if !ok {
+			cb = io.NopCloser(b)
+		}
+		once := atomic.Bool{}
 		r.GetBody = func() (io.ReadCloser, error) {
-			return io.NopCloser(bytes.NewReader(b)), nil
+			if once.CompareAndSwap(false, true) {
+				return cb, nil
+			}
+			return nil, http.ErrBodyReadAfterClose
 		}
 	default:
 		return fmt.Errorf("unsupported body type: %T", r.Request.Body)

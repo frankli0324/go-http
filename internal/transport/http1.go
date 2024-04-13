@@ -29,6 +29,9 @@ func (t *HTTP1) Write(w io.Writer, r *model.PreparedRequest) error {
 		return err
 	}
 	if body != nil {
+		if r.ContentLength == -1 {
+			w = chunked.NewChunkedWriter(w)
+		}
 		if _, err := io.Copy(w, body); err != nil {
 			return err
 		}
