@@ -121,14 +121,14 @@ func (t *HTTP1) readHeader(tp *textproto.Reader, resp *model.Response) error {
 		}
 		return err
 	}
-	proto, status, ok := strings.Cut(line, " ")
+	proto, status, ok := Cut(line, " ")
 	if !ok {
 		return errors.New("malformed HTTP response")
 	}
 	resp.Proto = proto
 	resp.Status = strings.TrimLeft(status, " ")
 
-	statusCode, _, _ := strings.Cut(resp.Status, " ")
+	statusCode, _, _ := Cut(resp.Status, " ")
 	if len(statusCode) != 3 {
 		return errors.New("malformed HTTP status code " + statusCode)
 	}
@@ -172,7 +172,7 @@ func (t *HTTP1) readTransfer(r io.Reader, resp *model.Response, closer func(io.R
 		contentLens[0] = first
 	}
 
-	cl := int64(-1)
+	cl := int64(0)
 	if len(contentLens) > 0 {
 		// Logic based on Content-Length
 		n, err := strconv.ParseUint(contentLens[0], 10, 63)
@@ -193,6 +193,8 @@ func (t *HTTP1) readTransfer(r io.Reader, resp *model.Response, closer func(io.R
 	case cl == 0:
 		closer(nil).Close()
 		resp.Body = http.NoBody
+	case cl < 0:
+		return errors.New("invalid response, content-length < 0")
 	}
 	return nil
 }

@@ -116,9 +116,9 @@ func (r *PreparedRequest) updateBody() (err error) {
 		if !ok {
 			cb = io.NopCloser(b)
 		}
-		once := atomic.Bool{}
+		once := uint32(0)
 		r.GetBody = func() (io.ReadCloser, error) {
-			if once.CompareAndSwap(false, true) {
+			if atomic.CompareAndSwapUint32(&once, 0, 1) {
 				return cb, nil
 			}
 			return nil, http.ErrBodyReadAfterClose

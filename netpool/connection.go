@@ -10,7 +10,7 @@ import (
 
 type conn struct {
 	conn     net.Conn
-	IsClosed atomic.Bool
+	IsClosed uint32
 	LastIdle time.Time
 }
 
@@ -38,6 +38,6 @@ func (c *conn) Read(p []byte) (n int, err error) {
 
 func (c *conn) Close() error {
 	err := c.conn.Close()
-	c.IsClosed.Store(true)
+	atomic.StoreUint32(&c.IsClosed, 1)
 	return err
 }

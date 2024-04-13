@@ -13,7 +13,7 @@ type H2C struct{}
 func (h *H2C) Read(r io.Reader, req *model.PreparedRequest, resp *model.Response) error {
 	_, ok := r.(*h2c.Stream)
 	if !ok {
-		return errors.ErrUnsupported
+		return errors.New("can only read request from h2 stream")
 	}
 	panic("unimplemented")
 }

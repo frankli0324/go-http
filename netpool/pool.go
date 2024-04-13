@@ -5,6 +5,7 @@ import (
 	"io"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -53,7 +54,7 @@ func (p *connPool) Connect(ctx context.Context) (io.ReadWriteCloser, error) {
 			p.Unlock()
 			if p.maxIdleDuration != 0 && time.Since(c.LastIdle) > p.maxIdleDuration {
 				c.Close()
-			} else if !c.IsClosed.Load() {
+			} else if atomic.LoadUint32(&c.IsClosed) == 0 {
 				return releaser{p, c}, nil
 			}
 		default:
@@ -65,7 +66,7 @@ func (p *connPool) Connect(ctx context.Context) (io.ReadWriteCloser, error) {
 
 func (p *connPool) Release(c *conn) {
 	<-p.connTicket
-	if !c.IsClosed.Load() {
+	if atomic.LoadUint32(&c.IsClosed) == 0 {
 		select {
 		case p.idleTicket <- nil:
 			p.Lock()
