@@ -97,8 +97,20 @@ func (t *HTTP1) Read(r io.Reader, req *model.PreparedRequest, resp *model.Respon
 	if cr, ok := r.(io.Closer); ok && req.Header.Get("Connection") == "close" {
 		closer = func(r io.Reader) io.ReadCloser { return bodyCloser{r, cr.Close} }
 	}
-	tp := textproto.NewReader(bufio.NewReader(r))
 
+	tp := textproto.NewReader(bufio.NewReader(r))
+	if err := t.readHeader(tp, resp); err != nil {
+		return err
+	}
+
+	if cr, ok := r.(io.Closer); ok && resp.Header.Get("Connection") == "close" {
+		closer = func(r io.Reader) io.ReadCloser { return bodyCloser{r, cr.Close} }
+	}
+
+	return t.readTransfer(tp.R, resp, closer)
+}
+
+func (t *HTTP1) readHeader(tp *textproto.Reader, resp *model.Response) error {
 	line, err := tp.ReadLine()
 	if err != nil {
 		if err == io.EOF {
@@ -122,7 +134,8 @@ func (t *HTTP1) Read(r io.Reader, req *model.PreparedRequest, resp *model.Respon
 		return errors.New("malformed HTTP status code")
 	}
 
-	// Parse the response headers.
+	// Parse the response headers. There are cases where case sensitivity
+	// is needed, but is ignored intentionally in this implementation.
 	mimeHeader, err := tp.ReadMIMEHeader()
 	if err != nil {
 		if err == io.EOF {
@@ -136,16 +149,13 @@ func (t *HTTP1) Read(r io.Reader, req *model.PreparedRequest, resp *model.Respon
 		}
 	}
 	resp.Header = http.Header(mimeHeader)
-
-	if cr, ok := r.(io.Closer); ok && resp.Header.Get("Connection") == "close" {
-		closer = func(r io.Reader) io.ReadCloser { return bodyCloser{r, cr.Close} }
-	}
-
-	return t.readTransfer(tp.R, resp, closer)
+	return nil
 }
 
 func (t *HTTP1) readTransfer(r io.Reader, resp *model.Response, closer func(io.Reader) io.ReadCloser) error {
+	// the header key was canonicalized while reading from the stream
 	contentLens := resp.Header["Content-Length"]
+	delete(resp.Header, "Content-Length")
 
 	// Hardening against HTTP request smuggling, taken from standard library
 	if len(contentLens) > 1 {
@@ -156,12 +166,7 @@ func (t *HTTP1) readTransfer(r io.Reader, resp *model.Response, closer func(io.R
 				return fmt.Errorf("http: message cannot contain multiple Content-Length headers; got %q", contentLens)
 			}
 		}
-
-		// deduplicate Content-Length
-		resp.Header.Del("Content-Length")
-		resp.Header.Add("Content-Length", first)
-
-		contentLens = resp.Header["Content-Length"]
+		contentLens[0] = first
 	}
 
 	cl := int64(-1)
@@ -178,7 +183,6 @@ func (t *HTTP1) readTransfer(r io.Reader, resp *model.Response, closer func(io.R
 		return nil
 	}
 
-	resp.Header.Del("Content-Length")
 	resp.ContentLength = cl
 	switch {
 	case cl > 0:
