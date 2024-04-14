@@ -8,7 +8,7 @@ import (
 	"github.com/frankli0324/go-http/internal/transport/h2c"
 )
 
-var aliveH2Conns = map[string]*h2c.Framer{}
+var aliveH2Conns = map[string]*h2c.Connection{}
 var muAliveH2Conns = sync.RWMutex{}
 
 func tryDialH2(hostport string) (net.Conn, error) {
@@ -30,8 +30,8 @@ func tryDialH2(hostport string) (net.Conn, error) {
 }
 
 func negotiateNewH2(hostport string, c *tls.Conn) (net.Conn, error) {
-	f := h2c.NewFramer(c)
-	if err := f.HandshakePriorKnowledge(); err != nil {
+	f := h2c.NewConn(c)
+	if err := f.Handshake(); err != nil {
 		return nil, err
 	}
 	muAliveH2Conns.Lock()

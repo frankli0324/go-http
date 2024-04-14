@@ -7,8 +7,8 @@ import (
 var _ net.Conn = (*Stream)(nil)
 
 type Stream struct {
-	net.Conn
-	framer *Framer
+	*Connection
+	streamID uint32
 }
 
 // Close implements net.Conn.
@@ -21,16 +21,7 @@ func (s *Stream) Read(b []byte) (n int, err error) {
 	panic("unimplemented")
 }
 
-func (s *Stream) ReadFrame() *Frame {
-	// return s.framer.ReadFrame()
-	panic("unimplemented")
-}
-
 // Write implements net.Conn.
 func (s *Stream) Write(b []byte) (n int, err error) {
 	panic("unimplemented")
-}
-
-func (s *Stream) WriteFrame(frame *Frame) {
-	s.framer.WriteFrame(frame)
 }
