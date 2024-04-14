@@ -73,7 +73,7 @@ func (r *Request) Prepare() (*PreparedRequest, error) {
 func (r *PreparedRequest) updateBody() (err error) {
 	if r.Request.Body == nil {
 		r.GetBody = func() (io.ReadCloser, error) {
-			return nil, nil
+			return http.NoBody, nil
 		}
 		return nil
 	}

@@ -1,7 +1,6 @@
 package h2c
 
 import (
-	"bytes"
 	"crypto/rand"
 	"errors"
 	"io"
@@ -11,26 +10,26 @@ import (
 	"time"
 
 	"golang.org/x/net/http2"
-	"golang.org/x/net/http2/hpack"
 )
 
 func NewConn(c net.Conn) *Connection {
+	settings := NewSettings()
 	conn := &Connection{
 		Conn:     c,
 		streams:  map[int32]chan *http2.Frame{},
-		settings: map[http2.SettingID]uint32{},
-		framer:   http2.NewFramer(c, c),
+		settings: settings,
 
-		pinglog:      map[[8]byte]chan interface{}{},
+		pingFut:      map[[8]byte]chan interface{}{},
 		lastStreamID: -1, // add 2 each time
+		hpackMixin:   newHpackMixin(settings),
+		framer:       newFramerMixin(c, settings),
 	}
-
-	conn.hbuf = &bytes.Buffer{}
-	conn.he = hpack.NewEncoder(conn.hbuf)
 
 	return conn
 }
 
+// Connection holds the same purpose as [golang.org/x/net/http.ClientConn], yet it
+// couples with net/http.Transport deeply, so we are re-implementing it.
 type Connection struct {
 	net.Conn
 
@@ -38,15 +37,14 @@ type Connection struct {
 	// must be read from and written to atomically
 	closing uint32
 
-	streams  map[int32]chan *http2.Frame
-	settings map[http2.SettingID]uint32
-	framer   *http2.Framer
-	hd       *hpack.Decoder
-	he       *hpack.Encoder
-	hbuf     *bytes.Buffer
+	framer *framerMixin
+	*hpackMixin
 
-	pinglog map[[8]byte]chan interface{}
-	pingmu  sync.RWMutex
+	streams  map[int32]chan *http2.Frame
+	settings *ClientSettings
+
+	pingFut map[[8]byte]chan interface{}
+	muPing  sync.RWMutex
 
 	lastStreamID int32
 }
@@ -56,6 +54,24 @@ func (c *Connection) Handshake() error {
 	if _, err := io.WriteString(c.Conn, http2.ClientPreface); err != nil {
 		return err
 	}
+	if err := c.framer.WriteSettings(); err != nil {
+		return err
+	}
+	// The server connection preface consists of a potentially empty SETTINGS frame
+	// that MUST be the first frame the server sends in the HTTP/2 connection.
+	// https://httpwg.org/specs/rfc7540.html#rfc.section.3.5
+	f, err := c.framer.ReadFrame()
+	if err != nil {
+		return err
+	}
+	if s, ok := f.(*http2.SettingsFrame); ok {
+		c.handleSettings(s)
+	} else {
+		// goaway
+		return errors.New("connection error, first frame sent by server not settings")
+	}
+
+	// successful handshake
 	go c.consumer()
 	return nil
 }
@@ -75,14 +91,25 @@ func (c *Connection) Close() error {
 	panic("unimplemented")
 }
 
+// Ping could fail due to unstable connection when the server doesn't acknoledge it in 10 seconds,
+// try not make connection state change decisions based on the Ping results.
+// This is mostly used for debugging and keeping connection alive.
+// Ping shouldn't be called rapidly or a large number of channels would be created.
 func (c *Connection) Ping() error {
 	data, res := [8]byte{}, make(chan interface{})
 	if _, err := rand.Read(data[:]); err != nil {
 		return err
 	}
-	c.pingmu.Lock()
-	c.pinglog[data] = res
-	c.pingmu.Unlock()
+	c.muPing.Lock()
+	c.pingFut[data] = res
+	c.muPing.Unlock()
+	defer func() {
+		c.muPing.Lock()
+		delete(c.pingFut, data)
+		c.muPing.Unlock()
+		close(res)
+	}()
+
 	if err := c.framer.WritePing(false, data); err != nil {
 		return err
 	}
@@ -90,10 +117,6 @@ func (c *Connection) Ping() error {
 	case <-time.After(10 * time.Second):
 		return errors.New("ping timeout 10 seconds")
 	case <-res:
-		c.pingmu.Lock()
-		delete(c.pinglog, data)
-		c.pingmu.Unlock()
-		close(res)
 		return nil
 	}
 }
@@ -111,6 +134,11 @@ func (c *Connection) consumer() error {
 			c.handleSettings(frame)
 		case *http2.DataFrame:
 			c.handleData(frame)
+		case *http2.HeadersFrame:
+			// make sure framer.ReadMetaHeaders is initialized
+			return errors.New("unexpected frame, framer should return meta headers frame")
+		case *http2.MetaHeadersFrame:
+			c.handleMetaHeaders(frame)
 		}
 	}
 	return nil
