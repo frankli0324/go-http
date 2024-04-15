@@ -40,6 +40,23 @@ func (t *HTTP1) Write(w io.Writer, r *model.PreparedRequest) error {
 	return nil
 }
 
+// mimic stdlib behavior
+func (t *HTTP1) expectContentLength(r *model.PreparedRequest) bool {
+	if r.Method == "POST" || r.Method == "PUT" || r.Method == "PATCH" {
+		return true
+	}
+	if r.Method == "CONNECT" {
+		return false
+	}
+	if r.Header.Get("Transfer-Encoding") == "identity" {
+		if r.Method == "GET" || r.Method == "HEAD" {
+			return false
+		}
+		return true
+	}
+	return false
+}
+
 // writeHeader writes the status and header part of an http 1.1 request
 // e.g.:
 //
@@ -63,11 +80,14 @@ func (t *HTTP1) writeHeader(w io.Writer, r *model.PreparedRequest) error {
 	header.WriteString("Host: ")
 	header.WriteString(r.HeaderHost)
 	header.WriteString("\r\n")
-	if r.ContentLength != -1 {
+	if r.ContentLength > 0 {
 		header.WriteString("Content-Length: ")
 		header.WriteString(strconv.FormatInt(r.ContentLength, 10))
 		header.WriteString("\r\n")
+	} else if r.ContentLength == 0 && t.expectContentLength(r) {
+		header.WriteString("Content-Length: 0\r\n")
 	}
+
 	for k, v := range r.Header {
 		for _, v := range v {
 			header.WriteString(k)
@@ -88,36 +108,27 @@ func (t *HTTP1) writeHeader(w io.Writer, r *model.PreparedRequest) error {
 }
 
 func (t *HTTP1) Read(r io.Reader, req *model.PreparedRequest, resp *model.Response) (err error) {
-	closer := io.NopCloser
-	if cr, ok := r.(Releaser); ok {
-		closer = func(r io.Reader) io.ReadCloser {
-			return bodyCloser{r, func() error {
-				cr.Release()
-				return nil
-			}}
-		}
-	}
-	if cr, ok := r.(io.Closer); ok && req.Header.Get("Connection") == "close" {
-		closer = func(r io.Reader) io.ReadCloser { return bodyCloser{r, cr.Close} }
-	}
-
 	tp := textproto.NewReader(bufio.NewReader(r))
 	if err := t.readHeader(tp, resp); err != nil {
 		return err
 	}
 
-	if cr, ok := r.(io.Closer); ok && resp.Header.Get("Connection") == "close" {
-		closer = func(r io.Reader) io.ReadCloser { return bodyCloser{r, cr.Close} }
+	// A client MUST ignore any Content-Length or Transfer-Encoding header fields
+	// received in a successful response to CONNECT.
+	// https://www.rfc-editor.org/rfc/rfc9110#section-9.3.6-12
+	if req.Method == "CONNECT" && resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		resp.Header.Del("Transfer-Encoding")
+		resp.Header.Del("Content-Length")
 	}
 
-	return t.readTransfer(tp.R, resp, closer)
+	return t.readTransfer(tp.R, r, req, resp)
 }
 
 func (t *HTTP1) readHeader(tp *textproto.Reader, resp *model.Response) error {
 	line, err := tp.ReadLine()
 	if err != nil {
 		if err == io.EOF {
-			err = io.ErrUnexpectedEOF
+			err = fmt.Errorf("unexpected error while reading response headers: %w", io.ErrUnexpectedEOF)
 		}
 		return err
 	}
@@ -155,7 +166,22 @@ func (t *HTTP1) readHeader(tp *textproto.Reader, resp *model.Response) error {
 	return nil
 }
 
-func (t *HTTP1) readTransfer(r io.Reader, resp *model.Response, closer func(io.Reader) io.ReadCloser) error {
+func (t *HTTP1) readTransfer(br, r io.Reader, req *model.PreparedRequest, resp *model.Response) error {
+	closer := io.NopCloser
+	if cr, ok := r.(Releaser); ok {
+		closer = func(r io.Reader) io.ReadCloser {
+			return bodyCloser{r, func() error {
+				cr.Release()
+				return nil
+			}}
+		}
+	}
+	if cr, ok := r.(io.Closer); ok {
+		if req.Header.Get("Connection") == "close" || resp.Header.Get("Connection") == "close" {
+			closer = func(r io.Reader) io.ReadCloser { return bodyCloser{r, cr.Close} }
+		}
+	}
+
 	// the header key was canonicalized while reading from the stream
 	contentLens := resp.Header["Content-Length"]
 	delete(resp.Header, "Content-Length")
@@ -172,29 +198,33 @@ func (t *HTTP1) readTransfer(r io.Reader, resp *model.Response, closer func(io.R
 		contentLens[0] = first
 	}
 
-	cl := int64(0)
-	if len(contentLens) > 0 {
-		// Logic based on Content-Length
-		n, err := strconv.ParseUint(contentLens[0], 10, 63)
-		if err == nil {
-			cl = int64(n)
-		}
-	}
-
 	if resp.Header.Get("Transfer-Encoding") == "chunked" {
-		resp.Body = closer(chunked.NewChunkedReader(r))
+		resp.Body = closer(chunked.NewChunkedReader(br))
 		return nil
 	}
 
-	resp.ContentLength = cl
+	resp.ContentLength = -1
+	if len(contentLens) > 0 {
+		// Logic based on Content-Length
+		n, err := strconv.ParseUint(contentLens[0], 10, 63)
+		if err != nil {
+			return errors.New("invalid content-length response header: " + contentLens[0])
+		}
+		resp.ContentLength = int64(n)
+	} else { // not chunked encoding, no content-length present, assume connection: close
+		if cr, ok := r.(io.Closer); ok {
+			closer = func(r io.Reader) io.ReadCloser { return bodyCloser{r, cr.Close} }
+		}
+	}
+
 	switch {
-	case cl > 0:
-		resp.Body = closer(io.LimitReader(r, cl))
-	case cl == 0:
+	case resp.ContentLength > 0:
+		resp.Body = closer(io.LimitReader(br, resp.ContentLength))
+	case resp.ContentLength == 0:
 		closer(nil).Close()
 		resp.Body = http.NoBody
-	case cl < 0:
-		return errors.New("invalid response, content-length < 0")
+	case resp.ContentLength < 0: // no content-length header present, assume connection: close
+		resp.Body = closer(br)
 	}
 	return nil
 }

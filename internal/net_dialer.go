@@ -5,25 +5,30 @@ import (
 	"crypto/tls"
 	"io"
 	"net"
+	"net/url"
 
+	"github.com/frankli0324/go-http/internal/model"
 	"github.com/frankli0324/go-http/netpool"
 )
 
 var pool = netpool.NewGroup(100, 80)
 
 var schemes = map[string]string{
-	"http": ":80", "https": ":443",
+	"http": ":80", "https": ":443", "socks": ":1080",
 }
 
 var zeroDialer net.Dialer
 
 type CoreDialer struct {
-	TLSConfig *tls.Config // the config to use
+	TLSConfig      *tls.Config // the config to use
+	TLSProxyConfig *tls.Config // the [*tls.Config] to use with proxy, if nil, [TLSConfig] will be used
+	GetProxy       func(ctx context.Context, r *model.Request) (string, error)
 }
 
 func (d *CoreDialer) Clone() Dialer {
 	return &CoreDialer{
 		TLSConfig: d.TLSConfig,
+		GetProxy:  nil,
 	}
 }
 
@@ -37,11 +42,27 @@ func (d *CoreDialer) Dial(ctx context.Context, r *PreparedRequest) (io.ReadWrite
 		hp = r.U.Hostname() + schemes[r.U.Scheme]
 	}
 	return pool.Connect(ctx, netpool.ConnRequest{
-		Key: hp, Dial: func(ctx context.Context) (net.Conn, error) {
+		Key: hp, Dial: func(ctx context.Context) (conn net.Conn, err error) {
 			if c, err := tryDialH2(hp); err == nil {
 				return c, err
 			}
-			conn, err := zeroDialer.DialContext(ctx, "tcp", hp)
+			if d.GetProxy != nil {
+				proxy, perr := d.GetProxy(ctx, r.Request)
+				if perr != nil {
+					return nil, perr
+				}
+				tlsCfg := d.TLSProxyConfig
+				if tlsCfg == nil {
+					tlsCfg = d.TLSConfig
+				}
+				proxyU, perr := url.Parse(proxy)
+				if perr != nil {
+					return nil, err
+				}
+				conn, err = dialContextProxy(ctx, r.U, proxyU, tlsCfg)
+			} else {
+				conn, err = zeroDialer.DialContext(ctx, "tcp", hp)
+			}
 			if err != nil {
 				return nil, err
 			}
@@ -58,7 +79,7 @@ func (d *CoreDialer) Dial(ctx context.Context, r *PreparedRequest) (io.ReadWrite
 				if c.ConnectionState().NegotiatedProtocol == "h2" {
 					return negotiateNewH2(hp, c) // must succeed since already negotiated h2
 				}
-				return c, nil
+				conn = c
 			}
 			return conn, nil
 		},
