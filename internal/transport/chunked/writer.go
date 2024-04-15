@@ -3,10 +3,11 @@ package chunked
 import (
 	"fmt"
 	"io"
+	"net/http"
 )
 
 // NewChunkedWriter is taken from golang src/net/http/internal/chunked.go
-func NewChunkedWriter(w io.Writer) io.WriteCloser {
+func NewChunkedWriter(w io.Writer) *chunkedWriter {
 	return &chunkedWriter{w}
 }
 
@@ -40,7 +41,11 @@ func (cw *chunkedWriter) Write(data []byte) (n int, err error) {
 	return
 }
 
-func (cw *chunkedWriter) Close() error {
-	_, err := io.WriteString(cw.Wire, "0\r\n")
+func (cw *chunkedWriter) CloseWithTrailer(trailer http.Header) error {
+	n, err := io.WriteString(cw.Wire, "0\r\n\r\n")
+	if err == nil && n != 5 {
+		return io.ErrShortWrite
+	}
+	// TODO: write trailer
 	return err
 }

@@ -25,15 +25,30 @@ func (t *HTTP1) Write(w io.Writer, r *model.PreparedRequest) error {
 		defer body.Close() // request body is ALWAYS closed
 	}
 
+	if body != http.NoBody && r.ContentLength == -1 {
+		r.Header.Set("Transfer-Encoding", "chunked")
+	}
 	if err := t.writeHeader(w, r); err != nil {
 		return err
 	}
-	if body != nil {
-		if r.ContentLength == -1 {
-			w = chunked.NewChunkedWriter(w)
-		}
-		if _, err := io.Copy(w, body); err != nil {
+	if body == http.NoBody {
+		return nil
+	}
+	if r.ContentLength == -1 {
+		cw := chunked.NewChunkedWriter(w)
+		if _, err := io.Copy(cw, body); err != nil {
 			return err
+		}
+		if err := cw.CloseWithTrailer(nil); err != nil {
+			return err
+		}
+	} else {
+		n, err := io.Copy(w, body)
+		if err != nil {
+			return err
+		}
+		if n != r.ContentLength {
+			return io.ErrShortWrite
 		}
 	}
 
@@ -200,6 +215,7 @@ func (t *HTTP1) readTransfer(br, r io.Reader, req *model.PreparedRequest, resp *
 
 	if resp.Header.Get("Transfer-Encoding") == "chunked" {
 		resp.Body = closer(chunked.NewChunkedReader(br))
+		resp.Header.Del("Transfer-Encoding")
 		return nil
 	}
 
