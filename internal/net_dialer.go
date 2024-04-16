@@ -5,63 +5,56 @@ import (
 	"crypto/tls"
 	"io"
 	"net"
-	"net/url"
 
-	"github.com/frankli0324/go-http/internal/model"
 	"github.com/frankli0324/go-http/netpool"
 )
 
 var pool = netpool.NewGroup(100, 80)
 
 var schemes = map[string]string{
-	"http": ":80", "https": ":443", "socks": ":1080",
+	"http": "80", "https": "443", "socks": "1080",
 }
 
 var zeroDialer net.Dialer
-
-type CoreDialer struct {
-	TLSConfig      *tls.Config // the config to use
-	TLSProxyConfig *tls.Config // the [*tls.Config] to use with proxy, if nil, [TLSConfig] will be used
-	GetProxy       func(ctx context.Context, r *model.Request) (string, error)
-}
-
-func (d *CoreDialer) Clone() Dialer {
-	return &CoreDialer{
-		TLSConfig: d.TLSConfig,
-		GetProxy:  nil,
-	}
-}
-
-func (d *CoreDialer) Unwrap() Dialer {
-	return nil
+var customDnsDialer = net.Dialer{
+	Resolver: &customServerResolver,
 }
 
 func (d *CoreDialer) Dial(ctx context.Context, r *PreparedRequest) (io.ReadWriteCloser, error) {
-	hp := r.U.Host
-	if r.U.Port() == "" {
-		hp = r.U.Hostname() + schemes[r.U.Scheme]
+	addr, port := r.U.Host, schemes[r.U.Scheme]
+	if add, prt, err := net.SplitHostPort(addr); err == nil {
+		addr, port = add, prt
 	}
+	hp := net.JoinHostPort(addr, port)
 	return pool.Connect(ctx, netpool.ConnRequest{
 		Key: hp, Dial: func(ctx context.Context) (conn net.Conn, err error) {
 			if c, err := tryDialH2(hp); err == nil {
 				return c, err
 			}
-			if d.GetProxy != nil {
-				proxy, perr := d.GetProxy(ctx, r.Request)
-				if perr != nil {
-					return nil, perr
+
+			conn, err = d.tryDialProxy(ctx, r)
+			if err != nil {
+				return nil, err
+			}
+			if conn == nil {
+				// if needCustomDial(d.ResolveConfig) {}
+				// as of now net.Dialer could handle current DNS configurations
+				network, dialer, dialctx, dst := "tcp", &zeroDialer, ctx, hp
+
+				if d.ResolveConfig.Network == "ip4" {
+					network = "tcp4"
+				} else if d.ResolveConfig.Network == "ip6" {
+					network = "tcp6"
 				}
-				tlsCfg := d.TLSProxyConfig
-				if tlsCfg == nil {
-					tlsCfg = d.TLSConfig
+				if static, ok := d.ResolveConfig.StaticHosts[addr]; ok {
+					dst = net.JoinHostPort(static, port)
 				}
-				proxyU, perr := url.Parse(proxy)
-				if perr != nil {
-					return nil, err
+				if dns := d.ResolveConfig.CustomDNSServer; dns != "" {
+					dialctx = dnsServerCtx{dialctx, dns}
+					dialer = &customDnsDialer
 				}
-				conn, err = dialContextProxy(ctx, r.U, proxyU, tlsCfg)
-			} else {
-				conn, err = zeroDialer.DialContext(ctx, "tcp", hp)
+
+				conn, err = dialer.DialContext(dialctx, network, dst)
 			}
 			if err != nil {
 				return nil, err
