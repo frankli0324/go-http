@@ -67,6 +67,8 @@ func (c *Client) transport(tlsProto string) transport.Transport {
 }
 
 func (c *Client) CtxDo(ctx context.Context, req *model.Request) (*model.Response, error) {
+	ctx = shadowStandardClientTrace(ctx) // get rid of the httptrace provided by standard library
+
 	pr, err := req.Prepare()
 	if err != nil {
 		return nil, err
