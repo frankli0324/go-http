@@ -55,12 +55,12 @@ func dialContextProxy(ctx context.Context, remote, proxy *url.URL, tlsCfg *tls.C
 			"Proxy-Authorization": {"Basic " + base64.StdEncoding.EncodeToString([]byte(auth))},
 		}
 	}
-	if err := h1Transport.Write(conn, connReq); err != nil {
+	if err := h1Transport.Write(ctx, conn, connReq); err != nil {
 		conn.Close()
 		return nil, err
 	}
 	resp := &model.Response{}
-	if err := h1Transport.Read(conn, connReq, resp); err != nil {
+	if err := h1Transport.Read(ctx, conn, connReq, resp); err != nil {
 		conn.Close()
 		return nil, err
 	}

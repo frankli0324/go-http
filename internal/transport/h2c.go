@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -13,7 +14,7 @@ import (
 
 type H2C struct{}
 
-func (h *H2C) Read(r io.Reader, req *model.PreparedRequest, resp *model.Response) error {
+func (h *H2C) Read(ctx context.Context, r io.Reader, req *model.PreparedRequest, resp *model.Response) error {
 	s, ok := getRawConn(r).(*h2c.Stream)
 	if !ok {
 		return errors.New("can only read response from h2 stream")
@@ -22,7 +23,7 @@ func (h *H2C) Read(r io.Reader, req *model.PreparedRequest, resp *model.Response
 	panic("unimplemented")
 }
 
-func (h *H2C) Write(w io.Writer, req *model.PreparedRequest) error {
+func (h *H2C) Write(ctx context.Context, w io.Writer, req *model.PreparedRequest) error {
 	s, ok := getRawConn(w).(*h2c.Stream)
 	if !ok {
 		return errors.New("can only write request to h2 stream")
@@ -33,7 +34,7 @@ func (h *H2C) Write(w io.Writer, req *model.PreparedRequest) error {
 	}
 	defer stream.Close()
 
-	if err := s.WriteHeaders(func(f func(k, v string)) {
+	if err := s.WriteHeaders(ctx, func(f func(k, v string)) {
 		f(":method", req.Method)
 		f(":authority", req.HeaderHost)
 		if req.Method != "CONNECT" {

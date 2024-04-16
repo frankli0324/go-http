@@ -77,10 +77,10 @@ func (c *Client) CtxDo(ctx context.Context, req *model.Request) (*model.Response
 	}
 
 	tr := c.transport(proto)
-	if err := tr.Write(conn, pr); err != nil {
+	if err := tr.Write(ctx, conn, pr); err != nil {
 		return nil, err
 	} else {
 		resp := &model.Response{}
-		return resp, tr.Read(conn, pr, resp)
+		return resp, tr.Read(ctx, conn, pr, resp)
 	}
 }

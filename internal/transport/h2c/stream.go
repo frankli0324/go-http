@@ -1,6 +1,7 @@
 package h2c
 
 import (
+	"context"
 	"net"
 
 	"golang.org/x/net/http2"
@@ -36,7 +37,7 @@ func (s *Stream) Flush() error {
 	return s.framer.Flush()
 }
 
-func (s *Stream) WriteHeaders(enumHeaders func(func(k, v string)), last bool) error {
+func (s *Stream) WriteHeaders(ctx context.Context, enumHeaders func(func(k, v string)), last bool) error {
 	data, err := s.Connection.encodeHeaders(enumHeaders)
 	if err != nil {
 		return err

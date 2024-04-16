@@ -2,6 +2,7 @@ package transport
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -16,7 +17,7 @@ import (
 
 type HTTP1 struct{}
 
-func (t *HTTP1) Write(w io.Writer, r *model.PreparedRequest) error {
+func (t *HTTP1) Write(ctx context.Context, w io.Writer, r *model.PreparedRequest) error {
 	body, err := r.GetBody() // can write body
 	if err != nil {
 		return err
@@ -122,7 +123,7 @@ func (t *HTTP1) writeHeader(w io.Writer, r *model.PreparedRequest) error {
 	return nil
 }
 
-func (t *HTTP1) Read(r io.Reader, req *model.PreparedRequest, resp *model.Response) (err error) {
+func (t *HTTP1) Read(ctx context.Context, r io.Reader, req *model.PreparedRequest, resp *model.Response) (err error) {
 	tp := textproto.NewReader(bufio.NewReader(r))
 	if err := t.readHeader(tp, resp); err != nil {
 		return err
