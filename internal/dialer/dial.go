@@ -1,4 +1,4 @@
-package internal
+package dialer
 
 import (
 	"context"
@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 
+	"github.com/frankli0324/go-http/internal/model"
 	"github.com/frankli0324/go-http/netpool"
 )
 
@@ -20,7 +21,7 @@ var customDnsDialer = net.Dialer{
 	Resolver: &customServerResolver,
 }
 
-func (d *CoreDialer) Dial(ctx context.Context, r *PreparedRequest) (io.ReadWriteCloser, error) {
+func (d *CoreDialer) Dial(ctx context.Context, r *model.PreparedRequest) (io.ReadWriteCloser, error) {
 	addr, port := r.U.Host, schemes[r.U.Scheme]
 	if add, prt, err := net.SplitHostPort(addr); err == nil {
 		addr, port = add, prt

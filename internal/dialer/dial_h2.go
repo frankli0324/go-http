@@ -1,4 +1,4 @@
-package internal
+package dialer
 
 import (
 	"crypto/tls"

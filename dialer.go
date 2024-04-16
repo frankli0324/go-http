@@ -1,9 +1,11 @@
 package http
 
-import "github.com/frankli0324/go-http/internal"
+import (
+	"github.com/frankli0324/go-http/internal/dialer"
+)
 
-type Dialer = internal.Dialer
-type CoreDialer = internal.CoreDialer
+type Dialer = dialer.Dialer
+type CoreDialer = dialer.CoreDialer
 
-type ProxyConfig = internal.ProxyConfig
-type ResolveConfig = internal.ResolveConfig
+type ProxyConfig = dialer.ProxyConfig
+type ResolveConfig = dialer.ResolveConfig

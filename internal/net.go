@@ -1,42 +1,22 @@
 package internal
 
 import (
-	"context"
 	"crypto/tls"
 	"io"
 	"net"
 
-	"github.com/frankli0324/go-http/internal/model"
+	"github.com/frankli0324/go-http/internal/dialer"
 	"github.com/frankli0324/go-http/internal/transport/h2c"
 )
 
-type CoreDialer struct {
-	ResolveConfig *ResolveConfig
-
-	TLSConfig *tls.Config // the config to use
-
-	GetProxy    func(ctx context.Context, r *model.Request) (string, error)
-	ProxyConfig *ProxyConfig
-}
-
-func (d *CoreDialer) Clone() Dialer {
-	return &CoreDialer{
-		ResolveConfig: d.ResolveConfig.Clone(),
-		TLSConfig:     d.TLSConfig.Clone(),
-		GetProxy:      d.GetProxy,
-		ProxyConfig:   d.ProxyConfig.Clone(),
-	}
-}
-
-func (d *CoreDialer) Unwrap() Dialer {
-	return nil
-}
+type Dialer = dialer.Dialer
+type CoreDialer = dialer.CoreDialer
 
 var defaultDialer = &CoreDialer{
 	TLSConfig: &tls.Config{
 		NextProtos: []string{"h2"},
 	},
-	ProxyConfig: &ProxyConfig{
+	ProxyConfig: &dialer.ProxyConfig{
 		TLSConfig:      &tls.Config{}, // don't want h2
 		ResolveLocally: false,
 	},
