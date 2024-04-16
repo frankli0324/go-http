@@ -61,9 +61,10 @@ func (s *Stream) WriteHeaders(ctx context.Context, enumHeaders func(func(k, v st
 	if err != nil {
 		return err
 	}
-	// below code is taken from x/net/http2 func (cc *ClientConn) writeHeaders()
 
 	s.writeCtx(ctx, func(ctx context.Context) error {
+		// below code consults x/net/http2 func (cc *ClientConn) writeHeaders()
+
 		first := true // first frame written (HEADERS is first, then CONTINUATION)
 		for len(data) > 0 {
 			select {

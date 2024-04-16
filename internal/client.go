@@ -10,6 +10,14 @@ import (
 
 type PreparedRequest = model.PreparedRequest
 
+// Dialers are responsible for creating underlying streams that http requests could
+// be written to and responses could be read from. for example, opening a raw TCP
+// connection for HTTP/1.1 requests.
+//
+// Unlike [net/http.Transport], A Dialer MUST NOT hold active connection states,
+// which means a Dialer must be able to be swapped out from a [Client] without
+// pain. Like [net/http.Transport], it SHOULD hold the connection related configs
+// like [ProxyConfiguration] or *[net/tls.Config].
 type Dialer interface {
 	Dial(ctx context.Context, r *PreparedRequest) (io.ReadWriteCloser, error)
 	Unwrap() Dialer

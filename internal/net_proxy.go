@@ -54,6 +54,9 @@ func (d *CoreDialer) tryDialProxy(ctx context.Context, r *model.PreparedRequest)
 	return nil, nil
 }
 
+// DialContextOverProxy creates a connection over http/socks proxy.
+// This part of logic may be reused when wrapping *[CoreDialer] into
+// a new custom [Dialer]
 func (d *CoreDialer) DialContextOverProxy(ctx context.Context, remote, proxy *url.URL) (net.Conn, error) {
 	if proxy.Scheme != "http" && proxy.Scheme != "https" { // TODO: socks
 		return nil, errors.New("unsupported proxy scheme:" + proxy.Scheme)

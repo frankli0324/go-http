@@ -5,6 +5,19 @@ import (
 	"net"
 )
 
+// we need a dedicated resolver for two scenarios:
+//
+//  1. Resolve remote address locally in proxied requests
+//  2. to customize the DNS server used for resolving hostname
+//
+// the standard library didn't provide a intuitive way of
+// setting DNS server addresses since it only follows the
+// system configuration (e.g. /etc/resolv.conf), leaving us only
+// one option of using [net.Resolver.Dial] hook with a Go Resolver.
+//
+// this part of code tries to take advantage of that
+// only option as far as possible to provide a relativly
+// intuitive configuration API.
 type ResolveConfig struct {
 	CustomDNSServer string
 	Network         string            // one of "ip4", "ip6", default is "ip"
@@ -59,6 +72,10 @@ func (d *CoreDialer) lookup(ctx context.Context, cfg *ResolveConfig, host string
 	return d.LookupIPServer(ctx, network, host, cfg.CustomDNSServer)
 }
 
+// LookupIPServer performs DNS lookup for a host on a custom dns server,
+// it calls [net.Resolver.LookupIP] with a Go Resolver behind the scenes.
+// This part of logic may be reused when wrapping *[CoreDialer] into
+// a new custom [Dialer]
 func (d *CoreDialer) LookupIPServer(ctx context.Context, network, host, dns string) ([]net.IP, error) {
 	return customServerResolver.LookupIP(dnsServerCtx{ctx, dns}, network, host)
 }
