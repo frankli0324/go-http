@@ -35,10 +35,20 @@ func (f *framerMixin) Flush() error {
 	return err
 }
 
+func (f *framerMixin) WriteSettings(settings ...http2.Setting) error {
+	f.muWrite.Lock()
+	err := f.Framer.WriteSettings(settings...)
+	if err == nil {
+		err = f.wbuf.Flush()
+	}
+	f.muWrite.Unlock()
+	return err
+}
+
 func (f *framerMixin) WriteHeaders(p http2.HeadersFrameParam, flush bool) error {
 	f.muWrite.Lock()
 	err := f.Framer.WriteHeaders(p)
-	if err != nil && flush {
+	if err == nil && flush {
 		err = f.wbuf.Flush()
 	}
 	f.muWrite.Unlock()
@@ -48,7 +58,7 @@ func (f *framerMixin) WriteHeaders(p http2.HeadersFrameParam, flush bool) error 
 func (f *framerMixin) WriteContinuation(streamID uint32, endHeaders bool, headerBlockFragment []byte, flush bool) error {
 	f.muWrite.Lock()
 	err := f.Framer.WriteContinuation(streamID, endHeaders, headerBlockFragment)
-	if err != nil && flush {
+	if err == nil && flush {
 		err = f.wbuf.Flush()
 	}
 	f.muWrite.Unlock()
@@ -58,7 +68,7 @@ func (f *framerMixin) WriteContinuation(streamID uint32, endHeaders bool, header
 func (f *framerMixin) WriteData(streamID uint32, endStream bool, data []byte, flush bool) error {
 	f.muWrite.Lock()
 	err := f.Framer.WriteData(streamID, endStream, data)
-	if err != nil && flush {
+	if err == nil && flush {
 		err = f.wbuf.Flush()
 	}
 	f.muWrite.Unlock()
@@ -68,7 +78,17 @@ func (f *framerMixin) WriteData(streamID uint32, endStream bool, data []byte, fl
 func (f *framerMixin) WritePing(ack bool, data [8]byte) error {
 	f.muWrite.Lock()
 	err := f.Framer.WritePing(ack, data)
-	if err != nil {
+	if err == nil {
+		err = f.wbuf.Flush()
+	}
+	f.muWrite.Unlock()
+	return err
+}
+
+func (f *framerMixin) WriteRSTStream(streamID uint32, code http2.ErrCode) error {
+	f.muWrite.Lock()
+	err := f.Framer.WriteRSTStream(streamID, code)
+	if err == nil {
 		err = f.wbuf.Flush()
 	}
 	f.muWrite.Unlock()
