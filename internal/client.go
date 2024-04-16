@@ -6,7 +6,6 @@ import (
 
 	"github.com/frankli0324/go-http/internal/model"
 	"github.com/frankli0324/go-http/internal/transport"
-	"github.com/frankli0324/go-http/internal/transport/h2c"
 )
 
 type PreparedRequest = model.PreparedRequest
@@ -71,9 +70,6 @@ func (c *Client) CtxDo(ctx context.Context, req *model.Request) (*model.Response
 	proto := ""
 	if tls := getTLSConn(conn); tls != nil {
 		proto = tls.ConnectionState().NegotiatedProtocol
-	}
-	if _, ok := getRawConn(conn).(*h2c.Stream); ok {
-		proto = "h2"
 	}
 
 	tr := c.transport(proto)

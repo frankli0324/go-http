@@ -4,6 +4,8 @@ import (
 	"crypto/tls"
 	"io"
 	"net"
+
+	"github.com/frankli0324/go-http/internal/transport/h2c"
 )
 
 var defaultDialer = &CoreDialer{
@@ -20,8 +22,14 @@ func getRawConn(c io.ReadWriteCloser) net.Conn {
 }
 
 func getTLSConn(c io.ReadWriteCloser) *tls.Conn {
-	if tls, ok := getRawConn(c).(*tls.Conn); ok {
+	raw := getRawConn(c)
+	if tls, ok := raw.(*tls.Conn); ok {
 		return tls
+	}
+	if str, ok := raw.(*h2c.Stream); ok {
+		if tls, ok := str.Connection.Conn.(*tls.Conn); ok {
+			return tls
+		}
 	}
 	return nil
 }
