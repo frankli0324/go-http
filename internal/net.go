@@ -9,7 +9,6 @@ import (
 	"github.com/frankli0324/go-http/internal/transport/h2c"
 )
 
-type Dialer = dialer.Dialer
 type CoreDialer = dialer.CoreDialer
 
 var defaultDialer = &CoreDialer{

@@ -1,35 +1,34 @@
 package internal_test
 
 import (
-	"net/http"
 	"testing"
 	"testing/iotest"
 
-	"github.com/frankli0324/go-http/internal/model"
+	"github.com/frankli0324/go-http/internal/http"
 )
 
 type tCase struct {
 	data []byte
-	req  *model.Request
+	req  *http.Request
 }
 
 var reqShouldBe = map[string]tCase{
 	"BasicRequest": {
-		req: &model.Request{
+		req: &http.Request{
 			Method: "GET",
 			URL:    "http://www.example.com",
 		},
 		data: []byte("GET / HTTP/1.1\r\nHost: www.example.com\r\n\r\n"),
 	},
 	"QueryNonStandard": {
-		req: &model.Request{
+		req: &http.Request{
 			Method: "GET",
 			URL:    "http://www.example.com/test?1=33=1",
 		},
 		data: []byte("GET /test?1=33=1 HTTP/1.1\r\nHost: www.example.com\r\n\r\n"),
 	},
 	"HeaderNotCanonicalized": {
-		req: &model.Request{
+		req: &http.Request{
 			Method: "GET",
 			URL:    "http://www.example.com/",
 			Header: http.Header{"x-123-vv": {"1"}},
@@ -37,7 +36,7 @@ var reqShouldBe = map[string]tCase{
 		data: []byte("GET / HTTP/1.1\r\nHost: www.example.com\r\nx-123-vv: 1\r\n\r\n"),
 	},
 	"URIFragmentNotIncluded": {
-		req: &model.Request{
+		req: &http.Request{
 			Method: "GET",
 			URL:    "http://www.example.com/?test=1#frag",
 		},

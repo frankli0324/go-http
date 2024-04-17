@@ -6,15 +6,14 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"net/http"
 
-	"github.com/frankli0324/go-http/internal/model"
+	"github.com/frankli0324/go-http/internal/http"
 	"github.com/frankli0324/go-http/internal/transport/h2c"
 )
 
 type H2C struct{}
 
-func (h *H2C) Read(ctx context.Context, r io.Reader, req *model.PreparedRequest, resp *model.Response) error {
+func (h *H2C) Read(ctx context.Context, r io.Reader, req *http.PreparedRequest, resp *http.Response) error {
 	s, ok := getRawConn(r).(*h2c.Stream)
 	if !ok {
 		return errors.New("can only read response from h2 stream")
@@ -23,7 +22,7 @@ func (h *H2C) Read(ctx context.Context, r io.Reader, req *model.PreparedRequest,
 	panic("unimplemented")
 }
 
-func (h *H2C) Write(ctx context.Context, w io.Writer, req *model.PreparedRequest) error {
+func (h *H2C) Write(ctx context.Context, w io.Writer, req *http.PreparedRequest) error {
 	s, ok := getRawConn(w).(*h2c.Stream)
 	if !ok {
 		return errors.New("can only write request to h2 stream")

@@ -9,10 +9,9 @@ import (
 	"io"
 	"math/rand"
 	"net"
-	"net/http"
 	"net/url"
 
-	"github.com/frankli0324/go-http/internal/model"
+	"github.com/frankli0324/go-http/internal/http"
 	"github.com/frankli0324/go-http/internal/transport"
 )
 
@@ -37,7 +36,7 @@ var (
 	h1Transport = transport.HTTP1{}
 )
 
-func (d *CoreDialer) tryDialProxy(ctx context.Context, r *model.PreparedRequest) (net.Conn, error) {
+func (d *CoreDialer) tryDialProxy(ctx context.Context, r *http.PreparedRequest) (net.Conn, error) {
 	if d.GetProxy != nil {
 		proxy, perr := d.GetProxy(ctx, r.Request)
 		if perr != nil {
@@ -100,8 +99,8 @@ func (d *CoreDialer) DialContextOverProxy(ctx context.Context, remote, proxy *ur
 		addr = ips[rand.Intn(len(ips))].String()
 	}
 
-	connReq := &model.PreparedRequest{
-		Request:    &model.Request{Method: "CONNECT"},
+	connReq := &http.PreparedRequest{
+		Request:    &http.Request{Method: "CONNECT"},
 		HeaderHost: remote.Host,
 		U:          &url.URL{Path: addr + ":" + port},
 		GetBody:    func() (io.ReadCloser, error) { return http.NoBody, nil },
@@ -115,7 +114,7 @@ func (d *CoreDialer) DialContextOverProxy(ctx context.Context, remote, proxy *ur
 		conn.Close()
 		return nil, err
 	}
-	resp := &model.Response{}
+	resp := &http.Response{}
 	if err := h1Transport.Read(ctx, conn, connReq, resp); err != nil {
 		conn.Close()
 		return nil, err

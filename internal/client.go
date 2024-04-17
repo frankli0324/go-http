@@ -4,14 +4,14 @@ import (
 	"context"
 	"io"
 
-	"github.com/frankli0324/go-http/internal/model"
+	"github.com/frankli0324/go-http/internal/http"
 	"github.com/frankli0324/go-http/internal/transport"
 )
 
-type PreparedRequest = model.PreparedRequest
+type PreparedRequest = http.PreparedRequest
 
 type Client struct {
-	dialer Dialer
+	dialer http.Dialer
 }
 
 // UseDialer provides the interface to modify the dialer used for
@@ -28,7 +28,7 @@ type Client struct {
 //
 // For example, http2 can be disabled by removing the "h2" from
 // tls ALPN. See how it is be done in [Client.DisableH2].
-func (c *Client) UseDialer(wrap func(Dialer) Dialer) {
+func (c *Client) UseDialer(wrap func(http.Dialer) http.Dialer) {
 	if c.dialer != nil {
 		c.dialer = wrap(c.dialer)
 	} else {
@@ -53,7 +53,7 @@ func (c *Client) transport(tlsProto string) transport.Transport {
 	panic("not supported tls proto:" + tlsProto)
 }
 
-func (c *Client) CtxDo(ctx context.Context, req *model.Request) (*model.Response, error) {
+func (c *Client) CtxDo(ctx context.Context, req *http.Request) (*http.Response, error) {
 	ctx = shadowStandardClientTrace(ctx) // get rid of the httptrace provided by standard library
 
 	pr, err := req.Prepare()
@@ -73,7 +73,7 @@ func (c *Client) CtxDo(ctx context.Context, req *model.Request) (*model.Response
 	if err := tr.Write(ctx, conn, pr); err != nil {
 		return nil, err
 	} else {
-		resp := &model.Response{}
+		resp := &http.Response{}
 		return resp, tr.Read(ctx, conn, pr, resp)
 	}
 }

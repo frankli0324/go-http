@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/frankli0324/go-http/internal"
-	"github.com/frankli0324/go-http/internal/model"
+	"github.com/frankli0324/go-http/internal/http"
 )
 
 type CombinedReadWriteCloser struct {
@@ -21,22 +21,22 @@ type TestDialer struct {
 }
 
 // Dial implements internal.Dialer.
-func (t *TestDialer) Dial(ctx context.Context, r *model.PreparedRequest) (io.ReadWriteCloser, error) {
+func (t *TestDialer) Dial(ctx context.Context, r *http.PreparedRequest) (io.ReadWriteCloser, error) {
 	return t.ReadWriteCloser, nil
 }
 
 // Unwrap implements internal.Dialer.
-func (t *TestDialer) Unwrap() internal.Dialer {
+func (t *TestDialer) Unwrap() http.Dialer {
 	return nil
 }
 
-func SendSingleRequest(t *testing.T, req *model.Request) io.Reader {
+func SendSingleRequest(t *testing.T, req *http.Request) io.Reader {
 	readResponse, writeResponse := io.Pipe()
 	go io.Copy(writeResponse, strings.NewReader("HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"))
 
 	readRequest, writeRequest := io.Pipe()
 	c := &internal.Client{}
-	c.UseDialer(func(internal.Dialer) internal.Dialer {
+	c.UseDialer(func(http.Dialer) http.Dialer {
 		return &TestDialer{CombinedReadWriteCloser{
 			Reader: readResponse,
 			Writer: writeRequest,

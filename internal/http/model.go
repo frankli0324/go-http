@@ -1,9 +1,15 @@
-package model
+package http
 
 import (
+	"context"
 	"io"
 	"net/http"
 )
+
+type Dialer interface {
+	Dial(ctx context.Context, r *PreparedRequest) (io.ReadWriteCloser, error)
+	Unwrap() Dialer
+}
 
 type Request struct {
 	Method string
