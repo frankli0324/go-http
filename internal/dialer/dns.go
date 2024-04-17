@@ -22,6 +22,23 @@ func (c *ResolveConfig) Clone() *ResolveConfig {
 	}
 }
 
+func (c *ResolveConfig) Merge(rc *ResolveConfig) *ResolveConfig {
+	res := c.Clone()
+	if res.CustomDNSServer == "" {
+		res.CustomDNSServer = rc.CustomDNSServer
+	}
+	if res.Network == "" {
+		res.Network = rc.Network
+	}
+	if res.StaticHosts == nil && rc.StaticHosts != nil {
+		res.StaticHosts = map[string]string{}
+	}
+	for k, v := range rc.StaticHosts {
+		res.StaticHosts[k] = v
+	}
+	return res
+}
+
 // this type should not be used outside this file.
 // prevents non-custom DNS server contexts to iterate through all keys
 type dnsServerCtx struct {

@@ -91,12 +91,19 @@ func (d *CoreDialer) DialContextOverProxy(ctx context.Context, remote, proxy *ur
 		dnsCfg := d.ProxyConfig.ResolveConfig
 		if dnsCfg == nil {
 			dnsCfg = d.ResolveConfig
+		} else {
+			dnsCfg = dnsCfg.Merge(d.ResolveConfig)
 		}
-		ips, err := d.lookup(ctx, dnsCfg, addr)
-		if err != nil {
-			return nil, err
+
+		if res, ok := dnsCfg.StaticHosts[addr]; ok {
+			addr = res
+		} else {
+			ips, err := d.lookup(ctx, dnsCfg, addr)
+			if err != nil {
+				return nil, err
+			}
+			addr = ips[rand.Intn(len(ips))].String()
 		}
-		addr = ips[rand.Intn(len(ips))].String()
 	}
 
 	connReq := &http.PreparedRequest{
