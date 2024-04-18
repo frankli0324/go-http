@@ -7,7 +7,7 @@ import (
 	"net"
 
 	"github.com/frankli0324/go-http/internal/http"
-	"github.com/frankli0324/go-http/netpool"
+	"github.com/frankli0324/go-http/utils/netpool"
 )
 
 var pool = netpool.NewGroup(100, 80)
@@ -73,7 +73,7 @@ func (d *CoreDialer) Dial(ctx context.Context, r *http.PreparedRequest) (io.Read
 				if c.ConnectionState().NegotiatedProtocol == "h2" {
 					return negotiateNewH2(hp, c) // must succeed since already negotiated h2
 				}
-				conn = c
+				conn = wrapTLS(c, conn)
 			}
 			return conn, nil
 		},
