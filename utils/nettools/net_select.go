@@ -1,7 +1,6 @@
 package nettools
 
 import (
-	"math/rand"
 	"net"
 	"time"
 
@@ -13,14 +12,14 @@ var _ = func() error { // make sure this executes before func init()
 	return nil
 }()
 
-func selectForWrite(cc []net.Conn, timeout time.Duration) (canWrite net.Conn) {
-	rconns, remaining := getAllSysRawConns(cc)
-	controlFDSet(rconns, func(u []int) {
+func selectForWrite(cc []net.Conn, cbUnsure, cbOK func(net.Conn), cbErr func(net.Conn, error), timeout time.Duration) {
+	controlFDSet(cc, func(u []int) {
 		tv := unix.NsecToTimeval(int64(50 * time.Millisecond))
 		idx := make([]int, 0, len(u))
 		var set unix.FdSet
 		for i, fd := range u {
-			if fd == -1 {
+			if fd == -1 || fd > 1024 {
+				cbUnsure(cc[i])
 				continue
 			}
 			set.Set(int(fd))
@@ -34,18 +33,15 @@ func selectForWrite(cc []net.Conn, timeout time.Duration) (canWrite net.Conn) {
 			} else if n > 0 {
 				for i, fd := range u {
 					if set.IsSet(int(fd)) {
-						canWrite = cc[idx[i]]
-						return
+						cbOK(cc[i])
+					} else { // check for errors
+						cbUnsure(cc[idx[i]])
 					}
 				}
 			}
 			timeout -= 50 * time.Millisecond
 		}
 	})
-	if canWrite == nil && len(remaining) > 0 {
-		return remaining[rand.Intn(len(remaining))]
-	}
-	return
 }
 
 func max(nums []int) int {

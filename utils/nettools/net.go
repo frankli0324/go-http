@@ -16,49 +16,42 @@ const (
 )
 
 var (
-	supported             = map[Mode]func(cc []net.Conn, timeout time.Duration) net.Conn{}
-	GetConnectionForWrite func(cc []net.Conn, timeout time.Duration) net.Conn
+	supported = map[Mode]func(cc []net.Conn, cbUnsure, cbOK func(net.Conn), cbErr func(net.Conn, error), timeout time.Duration){}
+	picked    func(cc []net.Conn, cbUnsure, cbOK func(net.Conn), cbErr func(net.Conn, error), timeout time.Duration)
 )
+
+func GetConnectionForWrite(cc []net.Conn, cbUnsure, cbOK func(net.Conn), cbErr func(net.Conn, error), timeout time.Duration) {
+	picked(cc, cbUnsure, cbOK, cbErr, timeout)
+}
 
 func init() {
 	for _, mode := range []Mode{ModeEpoll, ModePoll, ModeSelect} {
 		if supported[mode] != nil {
-			GetConnectionForWrite = supported[mode]
+			picked = supported[mode]
 			break
 		}
 	}
-}
-
-func getAllSysRawConns(cc []net.Conn) ([]syscall.RawConn, []net.Conn) {
-	rc := make([]syscall.RawConn, len(cc))
-	nrc := []net.Conn(nil)
-	for i, raw := range cc {
-		if t, ok := raw.(interface{ NetConn() net.Conn }); ok {
-			// is *tls.Conn or polyfilled TLS Connection
-			raw = t.NetConn()
-		}
-		if c, ok := raw.(syscall.Conn); ok {
-			if c, err := c.SyscallConn(); err == nil {
-				rc[i] = c
-				continue
+	if picked == nil {
+		picked = func(cc []net.Conn, cbUnsure, _ func(net.Conn), _ func(net.Conn, error), timeout time.Duration) {
+			for _, c := range cc {
+				cbUnsure(c)
 			}
 		}
-		nrc = append(nrc, raw)
 	}
-	return rc, nrc
 }
 
-func controlFDSet(canSelect []syscall.RawConn, control func([]int)) {
-	if len(canSelect) == 0 {
+func controlFDSet(connections []net.Conn, control func([]int)) {
+	if len(connections) == 0 {
 		return
 	}
+	cc := mapConnsToFDs(connections)
 	releaser := sync.RWMutex{}
 	wg := sync.WaitGroup{}
 
 	releaser.Lock()
-	fds := make([]int, len(canSelect))
-	errs := make([]error, len(canSelect))
-	for i, s := range canSelect {
+	fds := make([]int, len(cc))
+	errs := make([]error, len(cc))
+	for i, s := range cc {
 		if s == nil {
 			fds[i] = -1
 			continue
@@ -90,4 +83,25 @@ func controlFDSet(canSelect []syscall.RawConn, control func([]int)) {
 	// if err, do sth
 	control(fds)
 	releaser.Unlock() // release Control
+}
+
+func connsToFD(raw net.Conn) syscall.RawConn {
+	if t, ok := raw.(interface{ NetConn() net.Conn }); ok {
+		// is *tls.Conn or polyfilled TLS Connection
+		raw = t.NetConn()
+	}
+	if c, ok := raw.(syscall.Conn); ok {
+		if c, err := c.SyscallConn(); err == nil {
+			return c
+		}
+	}
+	return nil
+}
+
+func mapConnsToFDs(cc []net.Conn) []syscall.RawConn {
+	rc := make([]syscall.RawConn, len(cc))
+	for i, raw := range cc {
+		rc[i] = connsToFD(raw)
+	}
+	return rc
 }
