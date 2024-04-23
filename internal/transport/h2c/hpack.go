@@ -18,18 +18,18 @@ type hpackMixin struct {
 	maxWriteHeaderListSize uint32
 }
 
-func newHpackMixin(settings *ClientSettings) *hpackMixin {
+func newHpackMixin(c *Connection) *hpackMixin {
 	m := &hpackMixin{}
 	m.wBuf = &bytes.Buffer{}
 	m.hpEnc = hpack.NewEncoder(m.wBuf)
-	m.maxWriteHeaderListSize = settings.MaxWriteHeaderListSize
+	m.maxWriteHeaderListSize = c.settings.MaxWriteHeaderListSize
 
-	settings.On(http2.SettingHeaderTableSize, func(value uint32) {
+	c.settings.On(http2.SettingHeaderTableSize, func(value uint32) {
 		m.muWbuf.Lock()
 		m.hpEnc.SetMaxDynamicTableSize(value)
 		m.muWbuf.Unlock()
 	})
-	settings.On(http2.SettingMaxHeaderListSize, func(value uint32) {
+	c.settings.On(http2.SettingMaxHeaderListSize, func(value uint32) {
 		m.muWbuf.Lock()
 		m.maxWriteHeaderListSize = value // this value is protected by lock, settings is not
 		m.muWbuf.Unlock()

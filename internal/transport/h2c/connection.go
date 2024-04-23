@@ -1,30 +1,24 @@
 package h2c
 
 import (
-	"crypto/rand"
 	"errors"
 	"io"
 	"net"
-	"sync"
 	"sync/atomic"
-	"time"
 
 	"golang.org/x/net/http2"
 )
 
 func NewConn(c net.Conn) *Connection {
-	settings := NewSettings()
 	conn := &Connection{
-		Conn:     c,
-		streams:  map[int32]chan *http2.Frame{},
-		settings: settings,
-
-		pingFut:      map[[8]byte]chan interface{}{},
+		Conn:         c,
+		streams:      map[int32]chan *http2.Frame{},
 		lastStreamID: -1, // add 2 each time
-		hpackMixin:   newHpackMixin(settings),
-		framer:       newFramerMixin(c, settings),
 	}
-
+	conn.settings = newSettings(conn)
+	conn.hpackMixin = newHpackMixin(conn)
+	conn.framer = newFramerMixin(conn)
+	conn.pingMixin = newPingMixin(conn)
 	return conn
 }
 
@@ -39,12 +33,12 @@ type Connection struct {
 
 	framer *framerMixin
 	*hpackMixin
+	*pingMixin
 
 	streams  map[int32]chan *http2.Frame
 	settings *ClientSettings
 
-	pingFut map[[8]byte]chan interface{}
-	muPing  sync.RWMutex
+	on [20]func(http2.Frame) // frame types
 
 	lastStreamID int32
 }
@@ -54,7 +48,10 @@ func (c *Connection) Handshake() error {
 	if _, err := io.WriteString(c.Conn, http2.ClientPreface); err != nil {
 		return err
 	}
-	if err := c.framer.WriteSettings(); err != nil {
+	if err := c.framer.WriteSettings(
+		http2.Setting{ID: http2.SettingMaxFrameSize, Val: c.settings.MaxReadFrameSize},
+		http2.Setting{ID: http2.SettingMaxHeaderListSize, Val: c.settings.MaxReadHeaderListSize},
+	); err != nil {
 		return err
 	}
 	// The server connection preface consists of a potentially empty SETTINGS frame
@@ -64,8 +61,8 @@ func (c *Connection) Handshake() error {
 	if err != nil {
 		return err
 	}
-	if s, ok := f.(*http2.SettingsFrame); ok {
-		c.handleSettings(s)
+	if f.Header().Type == http2.FrameSettings {
+		c.on[http2.FrameSettings](f)
 	} else {
 		// goaway
 		return errors.New("connection error, first frame sent by server not settings")
@@ -91,47 +88,16 @@ func (c *Connection) Close() error {
 	panic("unimplemented")
 }
 
-// Ping could fail due to unstable connection when the server doesn't acknoledge it in 10 seconds,
-// try not make connection state change decisions based on the Ping results.
-// This is mostly used for debugging and keeping connection alive.
-// Ping shouldn't be called rapidly or a large number of channels would be created.
-func (c *Connection) Ping() error {
-	data, res := [8]byte{}, make(chan interface{})
-	if _, err := rand.Read(data[:]); err != nil {
-		return err
-	}
-	c.muPing.Lock()
-	c.pingFut[data] = res
-	c.muPing.Unlock()
-	defer func() {
-		c.muPing.Lock()
-		delete(c.pingFut, data)
-		c.muPing.Unlock()
-		close(res)
-	}()
-
-	if err := c.framer.WritePing(false, data); err != nil {
-		return err
-	}
-	select {
-	case <-time.After(10 * time.Second):
-		return errors.New("ping timeout 10 seconds")
-	case <-res:
-		return nil
-	}
-}
-
 func (c *Connection) consumer() error {
 	for atomic.LoadUint32(&c.closing) == 0 {
 		f, err := c.framer.ReadFrame()
 		if err != nil {
 			return err
 		}
+		if on := c.on[f.Header().Type]; on != nil {
+			on(f)
+		}
 		switch frame := f.(type) {
-		case *http2.PingFrame:
-			c.handlePing(frame)
-		case *http2.SettingsFrame:
-			c.handleSettings(frame)
 		case *http2.DataFrame:
 			c.handleData(frame)
 		case *http2.HeadersFrame:

@@ -33,10 +33,6 @@ func (s *Stream) Write(b []byte) (n int, err error) {
 	panic("unimplemented")
 }
 
-func (s *Stream) Flush() error {
-	return s.framer.Flush()
-}
-
 func (s *Stream) writeCtx(ctx context.Context, writeAction func(context.Context) error) error {
 	errCh := make(chan error)
 	go func() {
@@ -84,15 +80,21 @@ func (s *Stream) WriteHeaders(ctx context.Context, enumHeaders func(func(k, v st
 					BlockFragment: chunk,
 					EndStream:     last,
 					EndHeaders:    endHeaders,
-				}, false); err != nil {
+				}); err != nil {
 					return err
 				}
 				first = false
-			} else {
-				s.framer.WriteContinuation(s.streamID, endHeaders, chunk, false)
+			} else if err := s.framer.WriteContinuation(s.streamID, endHeaders, chunk); err != nil {
+				return err
 			}
 		}
-		return s.framer.Flush()
+		return nil
 	})
 	return nil
 }
+
+// func (s *Stream) WriteData(ctx context.Context, data []byte) error {
+// 	s.writeCtx(ctx, func(ctx context.Context) error {
+// 		s.framer.WriteData(s.streamID, false, data)
+// 	})
+// }

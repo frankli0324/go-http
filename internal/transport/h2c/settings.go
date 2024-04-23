@@ -2,9 +2,9 @@ package h2c
 
 import "golang.org/x/net/http2"
 
-// NewSettings creates a settings instance with default values
-func NewSettings() *ClientSettings {
-	return &ClientSettings{
+// newSettings creates a settings instance with default values
+func newSettings(c *Connection) *ClientSettings {
+	settings := &ClientSettings{
 		HeaderTableSize:        4096,
 		EnablePush:             1,
 		MaxConcurrentStreams:   1000,
@@ -13,8 +13,15 @@ func NewSettings() *ClientSettings {
 		MaxWriteFrameSize:      16384,
 		MaxReadHeaderListSize:  10 << 20,
 		MaxWriteHeaderListSize: 0xffffffff,
-		on:                     make(map[http2.SettingID][]func(value uint32)),
 	}
+	c.on[http2.FrameSettings] = func(f http2.Frame) {
+		sf := f.(*http2.SettingsFrame)
+		if sf.IsAck() {
+			return
+		}
+		settings.UpdateFrom(sf)
+	}
+	return settings
 }
 
 const (
@@ -32,7 +39,7 @@ type ClientSettings struct {
 	MaxWriteFrameSize      uint32
 	MaxReadHeaderListSize  uint32
 	MaxWriteHeaderListSize uint32
-	on                     map[http2.SettingID][]func(value uint32)
+	on                     [8][]func(value uint32) // 8 -> max settings id
 }
 
 func GetMaxFrameSize(fs uint32) uint32 {
