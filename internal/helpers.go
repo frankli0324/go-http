@@ -26,6 +26,11 @@ func (c *Client) UseCoreDialer(set func(*CoreDialer) http.Dialer) (ok bool) {
 func (c *Client) DisableH2() (ok bool) {
 	c.UseCoreDialer(func(d *CoreDialer) http.Dialer {
 		np := d.TLSConfig.NextProtos
+		if len(np) == 1 && np[0] == "h2" {
+			d.TLSConfig.NextProtos = nil
+			ok = true
+			return d
+		}
 		for i := range np {
 			if np[i] == "h2" {
 				d.TLSConfig.NextProtos = append(np[:i], np[i+1:]...)

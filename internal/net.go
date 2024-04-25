@@ -13,7 +13,7 @@ type CoreDialer = dialer.CoreDialer
 
 var defaultDialer = &CoreDialer{
 	TLSConfig: &tls.Config{
-		NextProtos: []string{"h2"},
+		NextProtos: []string{"h2", "http/1.1"},
 	},
 	ProxyConfig: &dialer.ProxyConfig{
 		TLSConfig:      &tls.Config{}, // don't want h2
@@ -34,7 +34,7 @@ func getTLSConn(c io.ReadWriteCloser) *tls.Conn {
 		return tls
 	}
 	if str, ok := raw.(*h2c.Stream); ok {
-		if tls, ok := str.Connection.Conn.(*tls.Conn); ok {
+		if tls, ok := str.Controller.Conn.(*tls.Conn); ok {
 			return tls
 		}
 	}

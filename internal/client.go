@@ -44,7 +44,7 @@ func (c *Client) dial(ctx context.Context, req *PreparedRequest) (io.ReadWriteCl
 }
 
 func (c *Client) transport(tlsProto string) transport.Transport {
-	if tlsProto == "" { // either not TLS or no protocols negotiated
+	if tlsProto == "http/1.1" || tlsProto == "" { // either not TLS or no protocols negotiated
 		return &transport.HTTP1{}
 	}
 	if tlsProto == "h2" {
