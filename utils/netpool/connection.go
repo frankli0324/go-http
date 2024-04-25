@@ -14,6 +14,10 @@ type conn struct {
 	LastIdle time.Time
 }
 
+func (c *conn) Available() bool {
+	return atomic.LoadUint32(&c.IsClosed) == 0
+}
+
 func (c *conn) Write(p []byte) (n int, err error) {
 	n, err = c.conn.Write(p)
 	if err != nil {

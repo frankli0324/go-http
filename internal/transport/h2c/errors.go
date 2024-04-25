@@ -6,6 +6,9 @@ type wrapErr struct {
 }
 
 func (e wrapErr) Wrap(err error) error {
+	if err == nil {
+		return e
+	}
 	return wrapErr{e.msg, err}
 }
 
@@ -22,4 +25,5 @@ func (e wrapErr) Is(err error) bool {
 
 var (
 	ErrStreamCancelled = wrapErr{"request cancelled", nil}
+	ErrStreamReset     = wrapErr{"stream already been reset", nil}
 )

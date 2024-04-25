@@ -1,4 +1,4 @@
-package h2c
+package controller
 
 import (
 	"errors"
@@ -10,7 +10,7 @@ import (
 	"golang.org/x/net/http2"
 )
 
-func newPingMixin(c *Connection) *pingMixin {
+func newPingMixin(c *Controller) *pingMixin {
 	c.on[http2.FramePing] = func(frame http2.Frame) {
 		pingFrame := frame.(*http2.PingFrame)
 		if pingFrame.IsAck() {
@@ -29,18 +29,18 @@ func newPingMixin(c *Connection) *pingMixin {
 			return
 		}
 		// warn: ack ping failed
-		_ = c.framer.WritePing(true, pingFrame.Data)
+		_ = c.WritePing(true, pingFrame.Data)
 	}
 	return &pingMixin{
-		framer:  c.framer,
-		pingFut: map[uint64]chan interface{}{},
+		framerForPing: c.framerMixin,
+		pingFut:       map[uint64]chan interface{}{},
 	}
 }
 
 type pingMixin struct {
-	pingFut map[uint64]chan interface{}
-	muPing  sync.RWMutex
-	framer  *framerMixin
+	pingFut       map[uint64]chan interface{}
+	muPing        sync.RWMutex
+	framerForPing *framerMixin
 }
 
 // Ping could fail due to unstable connection when the server doesn't acknoledge it in 10 seconds,
@@ -60,7 +60,7 @@ func (c *pingMixin) Ping() error {
 		close(res)
 	}()
 
-	if err := c.framer.WritePing(false, bdata); err != nil {
+	if err := c.framerForPing.WritePing(false, bdata); err != nil {
 		return err
 	}
 	select {

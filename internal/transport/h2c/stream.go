@@ -2,36 +2,90 @@ package h2c
 
 import (
 	"context"
-	"net"
+	"errors"
+	"fmt"
+	"io"
+	"log"
+	"sync"
 
+	"github.com/frankli0324/go-http/internal/transport/h2c/controller"
 	"golang.org/x/net/http2"
 )
 
-var _ net.Conn = (*Stream)(nil)
+func newStream(c *controller.Controller, id uint32) *Stream {
+	r, w := io.Pipe()
+	return &Stream{
+		Controller: c, streamID: id,
+		chanHeaders: make(chan *http2.MetaHeadersFrame),
+
+		dataReader: r, dataWriter: w,
+
+		done: make(chan interface{}),
+	}
+}
 
 type Stream struct {
-	*Connection
+	*controller.Controller
 	streamID uint32
+
+	// TODO: don't block receiving loop
+	chanHeaders chan *http2.MetaHeadersFrame
+	dataWriter  *io.PipeWriter
+	dataReader  *io.PipeReader
+
+	rstOnce sync.Once
+
+	doneReason struct {
+		rst    bool
+		code   http2.ErrCode
+		remote bool
+	}
+	doneOnce sync.Once
+	done     chan interface{} // either us or them reset the stream
+}
+
+func (s *Stream) Valid() bool {
+	if s == nil {
+		return false
+	}
+	select {
+	case <-s.done:
+		return false
+	default:
+		return true
+	}
 }
 
 func (s *Stream) ID() uint32 {
 	return s.streamID
 }
 
-// Close implements net.Conn.
-func (s *Stream) Close() error {
-	panic("unimplemented")
-}
-
-// Read implements net.Conn.
 func (s *Stream) Read(b []byte) (n int, err error) {
-	panic("unimplemented")
+	return 0, errors.ErrUnsupported
 }
 
-// Write implements net.Conn.
 func (s *Stream) Write(b []byte) (n int, err error) {
-	panic("unimplemented")
+	return 0, errors.ErrUnsupported
 }
+
+func (s *Stream) Close() error {
+	s.doneOnce.Do(func() { close(s.done) })
+	return nil
+}
+
+func (s *Stream) Reset(code http2.ErrCode, isReceived bool) (err error) {
+	s.rstOnce.Do(func() {
+		if !isReceived {
+			err = s.WriteRSTStream(s.streamID, code)
+		}
+		s.doneReason.code = code
+		s.doneReason.remote = isReceived
+		s.doneOnce.Do(func() { close(s.done) })
+	})
+	return err
+}
+
+var errReturnEarly = errors.New("internal: early return due to context cancelled")
 
 func (s *Stream) writeCtx(ctx context.Context, writeAction func(context.Context) error) error {
 	errCh := make(chan error)
@@ -41,60 +95,91 @@ func (s *Stream) writeCtx(ctx context.Context, writeAction func(context.Context)
 	}()
 	select {
 	case <-ctx.Done():
-		return ErrStreamCancelled.Wrap(s.framer.WriteRSTStream(s.streamID, http2.ErrCodeCancel))
+		return ErrStreamCancelled.Wrap(s.Reset(http2.ErrCodeCancel, false))
 	case err := <-errCh:
-		select {
-		case <-ctx.Done(): // would return early if cancelled, this logic also appears in standard libs
-			return ErrStreamCancelled.Wrap(s.framer.WriteRSTStream(s.streamID, http2.ErrCodeCancel))
-		default:
-			return err
+		if err == errReturnEarly {
+			return ErrStreamCancelled.Wrap(s.Reset(http2.ErrCodeCancel, false))
 		}
+		return err
 	}
 }
 
+// TODO: maybe change this api
 func (s *Stream) WriteHeaders(ctx context.Context, enumHeaders func(func(k, v string)), last bool) error {
-	data, err := s.Connection.encodeHeaders(enumHeaders)
+	data, err := s.Controller.EncodeHeaders(enumHeaders)
 	if err != nil {
 		return err
 	}
 
-	s.writeCtx(ctx, func(ctx context.Context) error {
+	return s.writeCtx(ctx, func(ctx context.Context) error {
 		// below code consults x/net/http2 func (cc *ClientConn) writeHeaders()
 
 		first := true // first frame written (HEADERS is first, then CONTINUATION)
 		for len(data) > 0 {
 			select {
 			case <-ctx.Done():
-				return nil
+				return errReturnEarly
 			default:
 			}
 			chunk := data
-			if len(chunk) > int(s.settings.MaxWriteFrameSize) {
-				chunk = chunk[:int(s.settings.MaxWriteFrameSize)]
+			maxWriteFrameSz := int(s.GetWriteSetting(http2.SettingMaxFrameSize))
+			if len(chunk) > maxWriteFrameSz {
+				chunk = chunk[:maxWriteFrameSz]
 			}
 			data = data[len(chunk):]
 			endHeaders := len(data) == 0
 			if first {
-				if err := s.framer.WriteHeaders(http2.HeadersFrameParam{
+				err := s.Controller.WriteHeaders(http2.HeadersFrameParam{
 					StreamID:      s.streamID,
 					BlockFragment: chunk,
 					EndStream:     last,
 					EndHeaders:    endHeaders,
-				}); err != nil {
+				})
+				if err != nil {
 					return err
 				}
 				first = false
-			} else if err := s.framer.WriteContinuation(s.streamID, endHeaders, chunk); err != nil {
+			} else if err := s.WriteContinuation(s.streamID, endHeaders, chunk); err != nil {
 				return err
 			}
 		}
 		return nil
 	})
+}
+
+// TODO: maybe change this api
+func (s *Stream) ReadHeaders(ctx context.Context, headersCb func(k, v string) error) error {
+	select {
+	case <-ctx.Done():
+		return ErrStreamCancelled.Wrap(s.Reset(http2.ErrCodeCancel, false))
+	case <-s.done:
+		if s.doneReason.rst {
+			return ErrStreamReset.Wrap(fmt.Errorf(
+				"initiated by remote:%t, code:%s", s.doneReason.remote, s.doneReason.code.String(),
+			))
+		}
+		return nil
+	case headers := <-s.chanHeaders:
+		for _, kv := range headers.Fields {
+			if err := headersCb(kv.Name, kv.Value); err != nil {
+				if err := s.Reset(http2.ErrCodeProtocol, false); err != nil {
+					log.Printf("reset stream %d error:%v", s.streamID, err)
+					// TODO: connection error
+				}
+			}
+		}
+	}
 	return nil
 }
 
-// func (s *Stream) WriteData(ctx context.Context, data []byte) error {
-// 	s.writeCtx(ctx, func(ctx context.Context) error {
-// 		s.framer.WriteData(s.streamID, false, data)
-// 	})
-// }
+func (s *Stream) WriteData(ctx context.Context, data io.Reader, last bool) error {
+	return s.writeCtx(ctx, func(ctx context.Context) error {
+		// s.Controller.WriteData(s.streamID, false, data)
+		return nil
+	})
+}
+
+// TODO: maybe change this api
+func (s *Stream) ReadData(ctx context.Context) io.ReadCloser {
+	return s.dataReader
+}

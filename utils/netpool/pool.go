@@ -4,7 +4,6 @@ import (
 	"context"
 	"io"
 	"net"
-	"sync/atomic"
 	"time"
 )
 
@@ -15,10 +14,13 @@ type releaser struct {
 
 func (r releaser) Release() {
 	r.p.Release(r.conn)
+	<-r.p.connTicket
 }
 
 func (r releaser) Close() error {
-	return r.conn.Close()
+	err := r.conn.Close()
+	<-r.p.connTicket
+	return err
 }
 
 func (r releaser) Raw() net.Conn {
@@ -48,7 +50,7 @@ func (p *connPool) Connect(ctx context.Context) (io.ReadWriteCloser, error) {
 		case c := <-p.idleTicket:
 			if p.maxIdleDuration != 0 && time.Since(c.LastIdle) > p.maxIdleDuration {
 				c.Close()
-			} else if atomic.LoadUint32(&c.IsClosed) == 0 {
+			} else if c.Available() {
 				return releaser{p, c}, nil
 			}
 		default:
@@ -59,8 +61,7 @@ func (p *connPool) Connect(ctx context.Context) (io.ReadWriteCloser, error) {
 }
 
 func (p *connPool) Release(c *conn) {
-	<-p.connTicket
-	if atomic.LoadUint32(&c.IsClosed) == 0 {
+	if c.Available() {
 		c.LastIdle = time.Now()
 		select {
 		case p.idleTicket <- c:
