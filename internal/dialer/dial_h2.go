@@ -20,8 +20,8 @@ func tryDialH2(hostport string) (net.Conn, error) {
 		if err == nil {
 			return s, err
 		} else {
-			hc.Close()
 			muAliveH2Conns.Lock()
+			hc.Close()
 			delete(aliveH2Conns, hostport)
 			muAliveH2Conns.Unlock()
 		} // if h2 create new stream fails, try a new connection
@@ -35,6 +35,9 @@ func negotiateNewH2(hostport string, c *tls.Conn) (net.Conn, error) {
 		return nil, err
 	}
 	muAliveH2Conns.Lock()
+	if old, ok := aliveH2Conns[hostport]; ok {
+		old.Close() // dial new when old is still alive
+	}
 	aliveH2Conns[hostport] = f
 	muAliveH2Conns.Unlock()
 	return f.Stream()
