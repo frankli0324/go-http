@@ -3,9 +3,10 @@ package transport
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"net"
+	nhttp "net/http"
+	"strconv"
 
 	"github.com/frankli0324/go-http/internal/http"
 	"github.com/frankli0324/go-http/internal/transport/h2c"
@@ -18,8 +19,39 @@ func (h *H2C) Read(ctx context.Context, r io.Reader, req *http.PreparedRequest, 
 	if !ok {
 		return errors.New("can only read response from h2 stream")
 	}
-	fmt.Println(s.ID())
-	panic("unimplemented")
+
+	resp.Header = make(http.Header)
+	err := s.ReadHeaders(ctx, func(k, v string) error {
+		if len(k) > 0 && k[0] == ':' {
+			switch k {
+			case ":status":
+				code, err := strconv.Atoi(v)
+				if err != nil {
+					return err
+				}
+				resp.StatusCode = code
+				resp.Status = v + " " + nhttp.StatusText(code)
+			default:
+				return errors.New("invalid response header")
+			}
+		} else {
+			resp.Header.Add(k, v)
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+
+	reader := s.ReadData(ctx)
+	resp.Body = bodyCloser{reader, func() error {
+		if r, ok := r.(io.Closer); ok {
+			r.Close()
+		}
+		return reader.Close()
+	}}
+
+	return nil
 }
 
 func (h *H2C) Write(ctx context.Context, w io.Writer, req *http.PreparedRequest) error {
