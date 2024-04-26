@@ -7,6 +7,12 @@ import (
 	"time"
 )
 
+type Conn interface {
+	io.ReadWriteCloser
+	Release()
+	Raw() net.Conn
+}
+
 type releaser struct {
 	p *connPool
 	*conn
@@ -43,7 +49,7 @@ func NewPool(maxIdle, maxConn uint, dialer func(ctx context.Context) (net.Conn, 
 	}
 }
 
-func (p *connPool) Connect(ctx context.Context) (io.ReadWriteCloser, error) {
+func (p *connPool) Connect(ctx context.Context) (Conn, error) {
 	p.connTicket <- nil
 	for {
 		select {

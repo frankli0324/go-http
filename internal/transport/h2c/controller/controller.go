@@ -5,17 +5,35 @@ import (
 	"io"
 	"log"
 	"net"
+	"sync"
 	"sync/atomic"
 
 	"golang.org/x/net/http2"
 )
 
 func NewController(c net.Conn) *Controller {
-	conn := &Controller{Conn: c}
+	conn := &Controller{
+		Conn: c,
+		done: make(chan struct{}),
+	}
 	conn.settingsMixin = newSettingsMixin(conn)
 	conn.hpackMixin = newHpackMixin(conn)
 	conn.framerMixin = newFramerMixin(conn)
 	conn.pingMixin = newPingMixin(conn)
+	conn.on[http2.FrameGoAway] = func(frame http2.Frame) {
+		conn.doneOnce.Do(func() {
+			frame := frame.(*http2.GoAwayFrame)
+			debug := frame.DebugData()
+			reason := &ReasonGoAway{
+				code:   frame.ErrCode,
+				debug:  make([]byte, len(debug)),
+				remote: true,
+			}
+			copy(reason.debug, debug)
+			conn.doneReason = reason
+			close(conn.done)
+		})
+	}
 	return conn
 }
 
@@ -28,6 +46,10 @@ type Controller struct {
 	// must be read from and written to atomically
 	closing uint32
 
+	done       chan struct{}
+	doneOnce   sync.Once
+	doneReason error
+
 	*framerMixin
 	*hpackMixin
 	*pingMixin
@@ -35,6 +57,36 @@ type Controller struct {
 	settingsMixin
 
 	on [20]func(http2.Frame) // frame types
+}
+
+// GoAway actively sends GOAWAY to remote peer
+func (c *Controller) GoAway(lastStreamID uint32, code http2.ErrCode) (err error) {
+	return c.GoAwayDebug(lastStreamID, code, nil)
+}
+
+// GoAwayDebug actively sends GOAWAY to remote peer with debug info
+func (c *Controller) GoAwayDebug(lastStreamID uint32, code http2.ErrCode, debug []byte) (err error) {
+	err = ErrMultipleGoAway
+	c.doneOnce.Do(func() {
+		c.doneReason = &ReasonGoAway{code: code, debug: debug, remote: false}
+		close(c.done)
+		err = c.WriteGoAway(lastStreamID, code, debug)
+		<-c.done
+	})
+	return
+}
+
+// Valid returns error if connection is no longer available
+func (c *Controller) Valid() error {
+	select {
+	case <-c.done:
+		if c.doneReason == nil {
+			return ErrReasonNil
+		}
+		return c.doneReason
+	default:
+	}
+	return nil
 }
 
 // Handshake performs PRI handshake on the underlying [net.Conn]
@@ -95,12 +147,6 @@ func (c *Controller) consumer() error {
 		}
 	}
 	return nil
-}
-
-func (c *Controller) OnGoAway(cb func(*http2.GoAwayFrame)) {
-	c.on[http2.FrameGoAway] = func(f http2.Frame) {
-		cb(f.(*http2.GoAwayFrame))
-	}
 }
 
 func (c *Controller) OnStreamReset(cb func(*http2.RSTStreamFrame)) {

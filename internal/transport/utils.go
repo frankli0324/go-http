@@ -5,10 +5,6 @@ import (
 	"strings"
 )
 
-type Releaser interface {
-	Release()
-}
-
 type bodyCloser struct {
 	io.Reader
 	close func() error

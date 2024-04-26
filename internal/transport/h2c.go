@@ -44,12 +44,7 @@ func (h *H2C) Read(ctx context.Context, r io.Reader, req *http.PreparedRequest, 
 	}
 
 	reader := s.ReadData(ctx)
-	resp.Body = bodyCloser{reader, func() error {
-		if r, ok := r.(io.Closer); ok {
-			r.Close()
-		}
-		return reader.Close()
-	}}
+	resp.Body = bodyCloser{reader, s.Close}
 
 	return nil
 }

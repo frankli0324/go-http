@@ -12,6 +12,7 @@ import (
 
 	"github.com/frankli0324/go-http/internal/http"
 	"github.com/frankli0324/go-http/internal/transport/chunked"
+	"github.com/frankli0324/go-http/utils/netpool"
 )
 
 type HTTP1 struct{}
@@ -183,7 +184,7 @@ func (t *HTTP1) readHeader(tp *textproto.Reader, resp *http.Response) error {
 
 func (t *HTTP1) readTransfer(br, r io.Reader, req *http.PreparedRequest, resp *http.Response) error {
 	closer := io.NopCloser
-	if cr, ok := r.(Releaser); ok {
+	if cr, ok := r.(netpool.Conn); ok {
 		closer = func(r io.Reader) io.ReadCloser {
 			return bodyCloser{r, func() error {
 				cr.Release()

@@ -17,10 +17,10 @@ type streamMutex struct {
 func NewConn(c net.Conn) *Connection {
 	ctrl := controller.NewController(c)
 	conn := &Connection{
+		Conn:          c,
 		controller:    ctrl,
 		lastStreamID:  -1, /* step up by 2 */
 		activeStreams: make(map[uint32]*streamMutex),
-		goAway:        make(chan struct{}),
 	}
 	ctrl.OnHeader(func(frame *http2.MetaHeadersFrame) {
 		conn.muActive.RLock()
@@ -55,34 +55,16 @@ func NewConn(c net.Conn) *Connection {
 			return active.Reset(frame.ErrCode, true)
 		})
 	})
-	ctrl.OnGoAway(func(frame *http2.GoAwayFrame) {
-		conn.goAwayOnce.Do(func() {
-			conn.goAwayReason.code = frame.ErrCode
-			debug := frame.DebugData()
-			conn.goAwayReason.debug = make([]byte, len(debug))
-			copy(conn.goAwayReason.debug, debug)
-			conn.goAwayReason.remote = true
-			close(conn.goAway)
-		})
-	})
 	return conn
 }
 
 type Connection struct {
+	net.Conn
 	controller   *controller.Controller
 	lastStreamID int32
 
 	activeStreams map[uint32]*streamMutex
 	muActive      sync.RWMutex
-
-	goAwayOnce   sync.Once
-	goAwayReason struct {
-		code   http2.ErrCode
-		debug  []byte
-		remote bool
-		last   uint32
-	}
-	goAway chan struct{}
 }
 
 func (c *Connection) Handshake() error {
@@ -103,11 +85,9 @@ func (c *Connection) withStream(streamID uint32, f func(*Stream) error) {
 	}
 }
 
-func (c *Connection) Stream() (net.Conn, error) {
-	select {
-	case <-c.goAway:
-		return nil, http2.GoAwayError{}
-	default:
+func (c *Connection) Stream() (*Stream, error) {
+	if err := c.controller.Valid(); err != nil {
+		return nil, err
 	}
 	// streamid := handshake()...
 	streamID := uint32(atomic.AddInt32(&c.lastStreamID, 2))
@@ -120,5 +100,10 @@ func (c *Connection) Stream() (net.Conn, error) {
 }
 
 func (c *Connection) Close() error {
-	return c.controller.Close()
+	// never close unless goaway
+	return nil
+}
+
+func (c *Connection) GoAway() error {
+	return c.controller.GoAway(uint32(c.lastStreamID), http2.ErrCodeNo)
 }

@@ -1,44 +1,28 @@
 package dialer
 
 import (
-	"crypto/tls"
+	"io"
 	"net"
-	"sync"
 
 	"github.com/frankli0324/go-http/internal/transport/h2c"
+	"github.com/frankli0324/go-http/utils/netpool"
 )
 
-var aliveH2Conns = map[string]*h2c.Connection{}
-var muAliveH2Conns = sync.RWMutex{}
+// helper
+type wStream h2c.Stream
 
-func tryDialH2(hostport string) (net.Conn, error) {
-	muAliveH2Conns.RLock()
-	hc := aliveH2Conns[hostport]
-	muAliveH2Conns.RUnlock()
-	if hc != nil {
-		s, err := hc.Stream()
-		if err == nil {
-			return s, err
-		} else {
-			muAliveH2Conns.Lock()
-			hc.Close()
-			delete(aliveH2Conns, hostport)
-			muAliveH2Conns.Unlock()
-		} // if h2 create new stream fails, try a new connection
-	}
-	return nil, net.ErrClosed
+func (s *wStream) Raw() net.Conn {
+	return (*h2c.Stream)(s)
 }
 
-func negotiateNewH2(hostport string, c *tls.Conn) (net.Conn, error) {
-	f := h2c.NewConn(c)
-	if err := f.Handshake(); err != nil {
-		return nil, err
+func tryDialH2Stream(re io.ReadWriteCloser) (io.ReadWriteCloser, error) {
+	if conn, ok := re.(netpool.Conn); ok {
+		if t, ok := conn.Raw().(*h2c.Connection); ok {
+			// is *tls.Conn or polyfilled TLS Connection
+			c, err := t.Stream()
+			conn.Release()
+			return (*wStream)(c), err
+		}
 	}
-	muAliveH2Conns.Lock()
-	if old, ok := aliveH2Conns[hostport]; ok {
-		old.Close() // dial new when old is still alive
-	}
-	aliveH2Conns[hostport] = f
-	muAliveH2Conns.Unlock()
-	return f.Stream()
+	return re, nil
 }
