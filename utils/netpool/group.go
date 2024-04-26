@@ -2,7 +2,6 @@ package netpool
 
 import (
 	"context"
-	"io"
 	"net"
 	"sync"
 )
@@ -26,7 +25,7 @@ func NewGroup(maxConnsPerHost, maxIdlePerHost uint) *connGroup {
 	}
 }
 
-func (g *connGroup) Connect(ctx context.Context, req ConnRequest) (io.ReadWriteCloser, error) {
+func (g *connGroup) Connect(ctx context.Context, req ConnRequest) (Conn, error) {
 	g.RLock()
 	p, ok := g.pools[req.Key]
 	g.RUnlock()

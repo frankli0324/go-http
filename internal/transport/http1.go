@@ -6,18 +6,18 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/textproto"
 	"strconv"
 	"strings"
 
 	"github.com/frankli0324/go-http/internal/http"
 	"github.com/frankli0324/go-http/internal/transport/chunked"
-	"github.com/frankli0324/go-http/utils/netpool"
 )
 
 type HTTP1 struct{}
 
-func (t *HTTP1) Write(ctx context.Context, w io.Writer, r *http.PreparedRequest) error {
+func (t *HTTP1) Write(ctx context.Context, w io.WriteCloser, r *http.PreparedRequest) error {
 	body, err := r.GetBody() // can write body
 	if err != nil {
 		return err
@@ -53,7 +53,7 @@ func (t *HTTP1) Write(ctx context.Context, w io.Writer, r *http.PreparedRequest)
 		}
 	}
 
-	return nil
+	return w.Close()
 }
 
 // mimic stdlib behavior
@@ -123,7 +123,7 @@ func (t *HTTP1) writeHeader(w io.Writer, r *http.PreparedRequest) error {
 	return nil
 }
 
-func (t *HTTP1) Read(ctx context.Context, r io.Reader, req *http.PreparedRequest, resp *http.Response) (err error) {
+func (t *HTTP1) Read(ctx context.Context, r io.ReadCloser, req *http.PreparedRequest, resp *http.Response) (err error) {
 	tp := textproto.NewReader(bufio.NewReader(r))
 	if err := t.readHeader(tp, resp); err != nil {
 		return err
@@ -182,19 +182,22 @@ func (t *HTTP1) readHeader(tp *textproto.Reader, resp *http.Response) error {
 	return nil
 }
 
-func (t *HTTP1) readTransfer(br, r io.Reader, req *http.PreparedRequest, resp *http.Response) error {
-	closer := io.NopCloser
-	if cr, ok := r.(netpool.Conn); ok {
-		closer = func(r io.Reader) io.ReadCloser {
-			return bodyCloser{r, func() error {
-				cr.Release()
-				return nil
+func (t *HTTP1) readTransfer(br *bufio.Reader, r io.ReadCloser, req *http.PreparedRequest, resp *http.Response) error {
+	closer := func(body io.Reader) io.ReadCloser { return bodyCloser{body, r.Close} }
+	closeCloser := closer
+	if cr, ok := r.(interface{ Raw() net.Conn }); ok { // can get underlying connection
+		closeCloser = func(body io.Reader) io.ReadCloser {
+			return bodyCloser{body, func() error {
+				err := cr.Raw().Close()
+				errRel := r.Close() // always release connection
+				if err != nil {
+					return err
+				}
+				return errRel
 			}}
 		}
-	}
-	if cr, ok := r.(io.Closer); ok {
 		if req.Header.Get("Connection") == "close" || resp.Header.Get("Connection") == "close" {
-			closer = func(r io.Reader) io.ReadCloser { return bodyCloser{r, cr.Close} }
+			closer = closeCloser
 		}
 	}
 
@@ -229,9 +232,7 @@ func (t *HTTP1) readTransfer(br, r io.Reader, req *http.PreparedRequest, resp *h
 		}
 		resp.ContentLength = int64(n)
 	} else { // not chunked encoding, no content-length present, assume connection: close
-		if cr, ok := r.(io.Closer); ok {
-			closer = func(r io.Reader) io.ReadCloser { return bodyCloser{r, cr.Close} }
-		}
+		closer = closeCloser
 	}
 
 	switch {
