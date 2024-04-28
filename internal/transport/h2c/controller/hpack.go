@@ -18,23 +18,21 @@ type hpackMixin struct {
 	maxWriteHeaderListSize uint32
 }
 
-func newHpackMixin(c *Controller) *hpackMixin {
-	m := &hpackMixin{}
-	m.wBuf = &bytes.Buffer{}
-	m.hpEnc = hpack.NewEncoder(m.wBuf)
-	m.maxWriteHeaderListSize = c.writeSettings.GetSetting(http2.SettingMaxHeaderListSize)
+func (h *hpackMixin) init(c *Controller) {
+	h.wBuf = &bytes.Buffer{}
+	h.hpEnc = hpack.NewEncoder(h.wBuf)
+	h.maxWriteHeaderListSize = c.writeSettings.GetSetting(http2.SettingMaxHeaderListSize)
 
 	c.writeSettings.On(http2.SettingHeaderTableSize, func(value uint32) {
-		m.muWbuf.Lock()
-		m.hpEnc.SetMaxDynamicTableSize(value)
-		m.muWbuf.Unlock()
+		h.muWbuf.Lock()
+		h.hpEnc.SetMaxDynamicTableSize(value)
+		h.muWbuf.Unlock()
 	})
 	c.writeSettings.On(http2.SettingMaxHeaderListSize, func(value uint32) {
-		m.muWbuf.Lock()
-		m.maxWriteHeaderListSize = value // this value is protected by lock, settings is not
-		m.muWbuf.Unlock()
+		h.muWbuf.Lock()
+		h.maxWriteHeaderListSize = value // this value is protected by lock, settings is not
+		h.muWbuf.Unlock()
 	})
-	return m
 }
 
 // EncodeHeaders encodes HEADERS frame BlockFragment

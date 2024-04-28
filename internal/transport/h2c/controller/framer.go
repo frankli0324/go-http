@@ -7,18 +7,17 @@ import (
 	"golang.org/x/net/http2/hpack"
 )
 
-func newFramerMixin(c *Controller) *framerMixin {
+type framerMixin struct {
+	muWrite sync.Mutex
+	framer  *http2.Framer
+}
+
+func (f *framerMixin) init(c *Controller) {
 	framer := http2.NewFramer(c.Conn, c.Conn) // framer already has a layer of buffer
 	// framer.SetMaxReadFrameSize(GetMaxFrameSize(c.remoteSettings.MaxReadFrameSize))
 	framer.ReadMetaHeaders = hpack.NewDecoder(c.readSettings.GetSetting(http2.SettingHeaderTableSize), nil)
 	framer.MaxHeaderListSize = c.readSettings.GetSetting(http2.SettingMaxHeaderListSize)
-
-	return &framerMixin{framer: framer}
-}
-
-type framerMixin struct {
-	muWrite sync.Mutex
-	framer  *http2.Framer
+	f.framer = framer
 }
 
 func (f *framerMixin) WriteSettings(settings ...http2.Setting) error {

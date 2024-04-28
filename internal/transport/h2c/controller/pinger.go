@@ -10,7 +10,15 @@ import (
 	"golang.org/x/net/http2"
 )
 
-func newPingMixin(c *Controller) *pingMixin {
+type pingMixin struct {
+	pingFut    map[uint64]chan interface{}
+	muPing     sync.RWMutex
+	_writePing func(ack bool, data [8]byte) error
+}
+
+func (p *pingMixin) init(c *Controller) {
+	c._writePing = c.WritePing
+	c.pingFut = map[uint64]chan interface{}{}
 	c.on[http2.FramePing] = func(frame http2.Frame) {
 		pingFrame := frame.(*http2.PingFrame)
 		if pingFrame.IsAck() {
@@ -31,36 +39,26 @@ func newPingMixin(c *Controller) *pingMixin {
 		// warn: ack ping failed
 		_ = c.WritePing(true, pingFrame.Data)
 	}
-	return &pingMixin{
-		framerForPing: c.framerMixin,
-		pingFut:       map[uint64]chan interface{}{},
-	}
-}
-
-type pingMixin struct {
-	pingFut       map[uint64]chan interface{}
-	muPing        sync.RWMutex
-	framerForPing *framerMixin
 }
 
 // Ping could fail due to unstable connection when the server doesn't acknoledge it in 10 seconds,
 // try not make connection state change decisions based on the Ping results.
 // This is mostly used for debugging and keeping connection alive.
 // Ping shouldn't be called rapidly or a large number of channels would be created.
-func (c *pingMixin) Ping() error {
+func (p *pingMixin) Ping() error {
 	data := rand.Uint64()
 	bdata, res := *(*[8]byte)(unsafe.Pointer(&data)), make(chan interface{})
-	c.muPing.Lock()
-	c.pingFut[data] = res
-	c.muPing.Unlock()
+	p.muPing.Lock()
+	p.pingFut[data] = res
+	p.muPing.Unlock()
 	defer func() {
-		c.muPing.Lock()
-		delete(c.pingFut, data)
-		c.muPing.Unlock()
+		p.muPing.Lock()
+		delete(p.pingFut, data)
+		p.muPing.Unlock()
 		close(res)
 	}()
 
-	if err := c.framerForPing.WritePing(false, bdata); err != nil {
+	if err := p._writePing(false, bdata); err != nil {
 		return err
 	}
 	select {

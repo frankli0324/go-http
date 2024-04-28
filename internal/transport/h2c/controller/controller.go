@@ -17,9 +17,9 @@ func NewController(c net.Conn) *Controller {
 		done: make(chan struct{}),
 	}
 	conn.settingsMixin = newSettingsMixin(conn)
-	conn.hpackMixin = newHpackMixin(conn)
-	conn.framerMixin = newFramerMixin(conn)
-	conn.pingMixin = newPingMixin(conn)
+	conn.hpackMixin.init(conn)
+	conn.framerMixin.init(conn)
+	conn.pingMixin.init(conn)
 	conn.on[http2.FrameGoAway] = func(frame http2.Frame) {
 		conn.doneOnce.Do(func() {
 			frame := frame.(*http2.GoAwayFrame)
@@ -50,13 +50,15 @@ type Controller struct {
 	doneOnce   sync.Once
 	doneReason error
 
-	*framerMixin
-	*hpackMixin
-	*pingMixin
+	framerMixin
+	hpackMixin
+	pingMixin
 
 	settingsMixin
 
 	on [20]func(http2.Frame) // frame types
+
+	onAfterHandshake []func()
 }
 
 // GoAway actively sends GOAWAY to remote peer
@@ -110,6 +112,9 @@ func (c *Controller) Handshake() error {
 	} else {
 		// goaway
 		return errors.New("connection error, first frame sent by server not settings")
+	}
+	for _, f := range c.onAfterHandshake {
+		f()
 	}
 
 	// successful handshake
