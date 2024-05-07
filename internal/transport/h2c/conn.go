@@ -23,20 +23,14 @@ func NewConn(c net.Conn) *Connection {
 		activeStreams: make(map[uint32]*streamMutex),
 	}
 	ctrl.OnHeader(func(frame *http2.MetaHeadersFrame) {
-		conn.muActive.RLock()
-		active := conn.activeStreams[frame.StreamID]
-		conn.muActive.RUnlock()
-		active.Lock()
-		defer active.Unlock()
-		if !active.Valid() {
-			ctrl.WriteRSTStream(frame.StreamID, http2.ErrCodeStreamClosed)
-			// if err goaway
-			return
-		}
-		active.chanHeaders <- frame
-		if frame.StreamEnded() {
-			active.Close()
-		}
+		conn.withStream(frame.StreamID, func(active *Stream) error {
+			active.chanHeaders <- frame
+			if frame.StreamEnded() {
+				active.dataWriter.Close() // no body
+				active.Close()
+			}
+			return nil
+		})
 	})
 	ctrl.OnData(func(frame *http2.DataFrame) {
 		conn.withStream(frame.StreamID, func(active *Stream) error {
