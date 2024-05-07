@@ -70,10 +70,10 @@ func (c *Client) CtxDo(ctx context.Context, req *http.Request) (*http.Response, 
 	}
 
 	tr := c.transport(proto)
-	if err := tr.Write(ctx, conn, pr); err != nil {
+	if err := tr.WriteRequest(ctx, conn, pr); err != nil {
 		return nil, err
 	} else {
 		resp := &http.Response{}
-		return resp, tr.Read(ctx, conn, pr, resp)
+		return resp, tr.ReadResponse(ctx, conn, pr, resp)
 	}
 }

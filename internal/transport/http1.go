@@ -17,7 +17,7 @@ import (
 
 type HTTP1 struct{}
 
-func (t *HTTP1) Write(ctx context.Context, w io.WriteCloser, r *http.PreparedRequest) error {
+func (t *HTTP1) WriteRequest(ctx context.Context, w io.WriteCloser, r *http.PreparedRequest) error {
 	body, err := r.GetBody() // can write body
 	if err != nil {
 		return err
@@ -123,7 +123,7 @@ func (t *HTTP1) writeHeader(w io.Writer, r *http.PreparedRequest) error {
 	return nil
 }
 
-func (t *HTTP1) Read(ctx context.Context, r io.ReadCloser, req *http.PreparedRequest, resp *http.Response) (err error) {
+func (t *HTTP1) ReadResponse(ctx context.Context, r io.ReadCloser, req *http.PreparedRequest, resp *http.Response) (err error) {
 	tp := textproto.NewReader(bufio.NewReader(r))
 	if err := t.readHeader(tp, resp); err != nil {
 		return err

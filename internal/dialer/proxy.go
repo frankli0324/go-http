@@ -117,12 +117,12 @@ func (d *CoreDialer) DialContextOverProxy(ctx context.Context, remote, proxy *ur
 			"Proxy-Authorization": {"Basic " + base64.StdEncoding.EncodeToString([]byte(auth))},
 		}
 	}
-	if err := h1Transport.Write(ctx, conn, connReq); err != nil {
+	if err := h1Transport.WriteRequest(ctx, conn, connReq); err != nil {
 		conn.Close()
 		return nil, err
 	}
 	resp := &http.Response{}
-	if err := h1Transport.Read(ctx, conn, connReq, resp); err != nil {
+	if err := h1Transport.ReadResponse(ctx, conn, connReq, resp); err != nil {
 		conn.Close()
 		return nil, err
 	}
