@@ -88,19 +88,16 @@ func (d *CoreDialer) Dial(ctx context.Context, r *http.PreparedRequest) (io.Read
 	if err != nil {
 		return nil, err
 	}
-	if conn, ok := re.(netpool.Conn); ok {
-		if t, ok := conn.Raw().(*h2c.Connection); ok {
-			// is *tls.Conn or polyfilled TLS Connection
-			c, err := t.Stream()
-			conn.Release()
-			return (*wStream)(c), err
-		}
-		return readWriteCloser{
-			ReadWriter: re,
-			close:      func() error { conn.Release(); return nil },
-		}, nil
+	if t, ok := re.Raw().(*h2c.Connection); ok {
+		// is *tls.Conn or polyfilled TLS Connection
+		c, err := t.Stream()
+		re.Release()
+		return (*wStream)(c), err
 	}
-	panic("shouldn't arrive here")
+	return readWriteCloser{
+		ReadWriter: re,
+		close:      func() error { re.Release(); return nil },
+	}, nil
 }
 
 // helper
