@@ -3,7 +3,6 @@ package controller
 import (
 	"errors"
 	"io"
-	"log"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -73,7 +72,8 @@ func (c *Controller) GoAwayDebug(lastStreamID uint32, code http2.ErrCode, debug 
 		c.doneReason = &ReasonGoAway{code: code, debug: debug, remote: false}
 		close(c.done)
 		err = c.WriteGoAway(lastStreamID, code, debug)
-		<-c.done
+		atomic.StoreUint32(&c.closing, 1)
+		c.Conn.Close()
 	})
 	return
 }
@@ -105,12 +105,16 @@ func (c *Controller) Handshake() error {
 	// https://httpwg.org/specs/rfc7540.html#rfc.section.3.5
 	f, err := c.framer.ReadFrame()
 	if err != nil {
+		c.doneOnce.Do(func() {
+			c.doneReason = err // TODO: wrap err
+			close(c.done)
+		})
 		return err
 	}
 	if f.Header().Type == http2.FrameSettings {
 		c.on[http2.FrameSettings](f)
 	} else {
-		// goaway
+		_ = c.GoAway(0, http2.ErrCodeProtocol)
 		return errors.New("connection error, first frame sent by server not settings")
 	}
 	for _, f := range c.onAfterHandshake {
@@ -168,11 +172,10 @@ func (c *Controller) OnData(cb func(*http2.DataFrame)) {
 
 func (c *Controller) OnHeader(cb func(*http2.MetaHeadersFrame)) {
 	c.on[http2.FrameHeaders] = func(f http2.Frame) {
-		if _, ok := f.(*http2.HeadersFrame); ok {
-			log.Printf("unexpected frame, framer should return meta headers frame")
-			// TODO: GOAWAY
+		if f, ok := f.(*http2.MetaHeadersFrame); ok {
+			cb(f)
 			return
 		}
-		cb(f.(*http2.MetaHeadersFrame))
+		panic("unexpected frame, framer should return meta headers frame")
 	}
 }
