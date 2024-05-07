@@ -86,6 +86,7 @@ func (s *Stream) Reset(code http2.ErrCode, isReceived bool) (err error) {
 }
 
 var errReturnEarly = errors.New("internal: early return due to context cancelled")
+var errReqBodyTooLong = errors.New("internal: request body larger than specified content length")
 
 func (s *Stream) writeCtx(ctx context.Context, writeAction func(context.Context) error) error {
 	errCh := make(chan error)
@@ -99,6 +100,8 @@ func (s *Stream) writeCtx(ctx context.Context, writeAction func(context.Context)
 	case err := <-errCh:
 		if err == errReturnEarly {
 			return ErrStreamCancelled.Wrap(s.Reset(http2.ErrCodeCancel, false))
+		} else if err == errReqBodyTooLong {
+			return ErrStreamCancelled.Wrap(err)
 		}
 		return err
 	}
@@ -166,16 +169,71 @@ func (s *Stream) ReadHeaders(ctx context.Context, headersCb func(k, v string) er
 					log.Printf("reset stream %d error:%v", s.streamID, err)
 					// TODO: connection error
 				}
+				return err
 			}
 		}
 	}
 	return nil
 }
 
-func (s *Stream) WriteData(ctx context.Context, data io.Reader, last bool) error {
+var bufPoolShort = sync.Pool{New: func() interface{} {
+	r := make([]byte, 1024)
+	return &r
+}}
+var bufPoolLong = sync.Pool{New: func() interface{} {
+	r := make([]byte, 16384*2)
+	return &r
+}}
+
+func getBodyWriteBuf(sz int) (b []byte, put func(interface{})) {
+	p := &bufPoolShort
+	if sz >= 16384 {
+		p = &bufPoolLong
+	}
+	b = *(p.Get().(*[]byte))
+	if sz > len(b) {
+		b = append(b, make([]byte, sz-len(b))...)
+	}
+	return b, p.Put
+}
+
+func (s *Stream) WriteRequestBody(ctx context.Context, data io.Reader, sz int64, last bool) error {
 	return s.writeCtx(ctx, func(ctx context.Context) error {
-		// s.Controller.WriteData(s.streamID, false, data)
-		return nil
+		read := int64(0)
+		maxWriteFrameSz := int(s.GetWriteSetting(http2.SettingMaxFrameSize))
+		chunk, put := getBodyWriteBuf(maxWriteFrameSz)
+		defer put(&chunk)
+		for {
+			select {
+			case <-ctx.Done():
+				return errReturnEarly
+			default:
+			}
+			l, err := data.Read(chunk)
+			endStream := last && err == io.EOF
+			if l != 0 || endStream {
+				read += int64(l)
+				err := s.Controller.WriteData(s.streamID, endStream, chunk[:l])
+				if err != nil {
+					s.Reset(http2.ErrCodeProtocol, false)
+					return err
+				}
+			}
+			if sz != -1 && read > sz {
+				s.Reset(http2.ErrCodeInternal, false)
+				return errReqBodyTooLong
+			}
+			if err != nil {
+				if err == io.EOF && sz != -1 && read < sz {
+					err = io.ErrUnexpectedEOF
+				}
+				if err != io.EOF {
+					s.Reset(http2.ErrCodeInternal, false)
+					return err
+				}
+				return nil // EOF
+			}
+		}
 	})
 }
 

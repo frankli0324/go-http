@@ -59,6 +59,7 @@ func (h *H2C) Write(ctx context.Context, w io.WriteCloser, req *http.PreparedReq
 		return err
 	}
 	defer stream.Close()
+	hasBody := stream != http.NoBody
 
 	if err := s.WriteHeaders(ctx, func(f func(k, v string)) {
 		f(":method", req.Method)
@@ -67,12 +68,22 @@ func (h *H2C) Write(ctx context.Context, w io.WriteCloser, req *http.PreparedReq
 			f(":scheme", req.U.Scheme)
 			f(":path", req.U.RequestURI())
 		}
-	}, stream == http.NoBody /* && request has no trailers */); err != nil {
+		for k, v := range req.Header {
+			for _, v := range v {
+				f(k, v)
+			}
+		}
+		if hasBody && req.ContentLength != -1 {
+			f("content-length", strconv.FormatInt(req.ContentLength, 10))
+		}
+	}, !hasBody /* && request has no trailers */); err != nil {
 		// TODO: trailers support
 		return err
 	}
-	if stream != http.NoBody {
-		// s.Write()
+	if hasBody {
+		if err := s.WriteRequestBody(ctx, stream, req.ContentLength, true); err != nil {
+			return err
+		}
 	}
 
 	return nil
