@@ -1,6 +1,10 @@
 package controller
 
-import "golang.org/x/net/http2"
+import (
+	"sync"
+
+	"golang.org/x/net/http2"
+)
 
 func newSettingsMixin(c *Controller) settingsMixin {
 	return settingsMixin{newWriteSettings(c), newReadSettings(c)}
@@ -10,11 +14,10 @@ type settingsMixin struct {
 	writeSettings, readSettings *settings
 }
 
-func (s settingsMixin) GetReadSetting(id http2.SettingID) uint32 {
-	return s.readSettings.GetSetting(id)
-}
-
+// GetWriteSetting is Locked
 func (s settingsMixin) GetWriteSetting(id http2.SettingID) uint32 {
+	s.writeSettings.mu.RLock()
+	defer s.writeSettings.mu.RUnlock()
 	return s.writeSettings.GetSetting(id)
 }
 
@@ -86,6 +89,7 @@ const (
 type settings struct {
 	settings [8]uint32               // http2.SettingID -> Val
 	on       [8][]func(value uint32) // 8 -> max settings id
+	mu       sync.RWMutex
 }
 
 // On registers callback on server pushed settings to client
@@ -94,6 +98,8 @@ func (s *settings) On(id http2.SettingID, do func(value uint32)) {
 }
 
 func (s *settings) UpdateFrom(frame *http2.SettingsFrame) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	frame.ForeachSetting(func(i http2.Setting) error {
 		for _, v := range s.on[i.ID] {
 			v(i.Val)

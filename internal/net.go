@@ -34,7 +34,7 @@ func getTLSConn(c io.ReadWriteCloser) *tls.Conn {
 		return tls
 	}
 	if str, ok := raw.(*h2c.Stream); ok {
-		if tls, ok := str.Controller.Conn.(*tls.Conn); ok {
+		if tls, ok := str.Conn.(*tls.Conn); ok {
 			return tls
 		}
 	}

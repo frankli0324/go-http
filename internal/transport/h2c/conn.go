@@ -3,7 +3,6 @@ package h2c
 import (
 	"net"
 	"sync"
-	"sync/atomic"
 
 	"github.com/frankli0324/go-http/internal/transport/h2c/controller"
 	"golang.org/x/net/http2"
@@ -17,6 +16,7 @@ func NewConn(c net.Conn) *Connection {
 		lastStreamID:  -1, /* step up by 2 */
 		activeStreams: make(map[uint32]*Stream),
 	}
+	conn.condActive = sync.NewCond(&conn.muActive)
 	ctrl.OnHeader(func(frame *http2.MetaHeadersFrame) {
 		conn.withStream(frame.StreamID, func(active *Stream) error {
 			active.chanHeaders <- frame
@@ -54,6 +54,7 @@ type Connection struct {
 
 	activeStreams map[uint32]*Stream
 	muActive      sync.RWMutex
+	condActive    *sync.Cond
 }
 
 func (c *Connection) Handshake() error {
@@ -79,15 +80,19 @@ func (c *Connection) Stream() (*Stream, error) {
 	if err := c.controller.Valid(); err != nil {
 		return nil, err
 	}
-	streamID := uint32(atomic.AddInt32(&c.lastStreamID, 2))
-
+	c.muActive.Lock()
+	for len(c.activeStreams) >= int(c.controller.GetWriteSetting(http2.SettingMaxConcurrentStreams)) {
+		c.condActive.Wait()
+	}
+	c.lastStreamID += 2
+	streamID := uint32(c.lastStreamID)
 	// TODO: check streamid inside 2^31 and match connection setting
-	s := newStream(c.controller, streamID, func() {
+	s := newStream(c, streamID, func() {
 		c.muActive.Lock()
 		delete(c.activeStreams, streamID)
 		c.muActive.Unlock()
+		c.condActive.Signal()
 	})
-	c.muActive.Lock()
 	c.activeStreams[streamID] = s
 	c.muActive.Unlock()
 	// TODO: rfc7540 6.9.2
@@ -107,4 +112,13 @@ func (c *Connection) Close() error {
 
 func (c *Connection) GoAway() error {
 	return c.controller.GoAway(uint32(c.lastStreamID), http2.ErrCodeNo)
+}
+
+// ShouldProcess checks if stream should be retried on a new connection
+// if some error occurred
+func (c *Connection) ShouldProcess(streamID uint32) bool {
+	if c.controller.Valid() == nil {
+		return true
+	}
+	return uint32(c.lastStreamID) >= streamID
 }

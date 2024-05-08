@@ -109,10 +109,10 @@ type flowControlMixin struct {
 func (flw *flowControlMixin) init(c *Controller) {
 	// outflow init
 	{
-		init := c.GetWriteSetting(http2.SettingInitialWindowSize) // 65535
+		init := c.writeSettings.GetSetting(http2.SettingInitialWindowSize) // 65535
 		flw.out.init(int32(init))
 		c.onAfterHandshake = append(c.onAfterHandshake, func() {
-			value := c.GetWriteSetting(http2.SettingInitialWindowSize)
+			value := c.writeSettings.GetSetting(http2.SettingInitialWindowSize)
 			if value > inflowMaxWindow {
 				c.GoAway(0, http2.ErrCodeFlowControl)
 				return
@@ -144,7 +144,7 @@ func (flw *flowControlMixin) init(c *Controller) {
 	}
 	// inflow init
 	{
-		init := c.GetReadSetting(http2.SettingInitialWindowSize)
+		init := c.readSettings.GetSetting(http2.SettingInitialWindowSize)
 		flw.in.init(init)
 	}
 }

@@ -8,14 +8,13 @@ import (
 	"log"
 	"sync"
 
-	"github.com/frankli0324/go-http/internal/transport/h2c/controller"
 	"golang.org/x/net/http2"
 )
 
-func newStream(c *controller.Controller, id uint32, done func()) *Stream {
+func newStream(c *Connection, id uint32, done func()) *Stream {
 	r, w := io.Pipe()
 	return &Stream{
-		Controller: c, streamID: id,
+		Connection: c, streamID: id,
 		chanHeaders: make(chan *http2.MetaHeadersFrame),
 
 		dataReader: r, dataWriter: w,
@@ -26,7 +25,7 @@ func newStream(c *controller.Controller, id uint32, done func()) *Stream {
 }
 
 type Stream struct {
-	*controller.Controller
+	*Connection
 	streamID uint32
 
 	// TODO: don't block receiving loop
@@ -81,7 +80,7 @@ func (s *Stream) Close() error {
 func (s *Stream) Reset(code http2.ErrCode, isReceived bool) (err error) {
 	s.rstOnce.Do(func() {
 		if !isReceived {
-			err = s.WriteRSTStream(s.streamID, code)
+			err = s.controller.WriteRSTStream(s.streamID, code)
 		}
 		s.doneReason.code = code
 		s.doneReason.remote = isReceived
@@ -114,7 +113,7 @@ func (s *Stream) writeCtx(ctx context.Context, writeAction func(context.Context)
 
 // TODO: maybe change this api
 func (s *Stream) WriteHeaders(ctx context.Context, enumHeaders func(func(k, v string)), last bool) error {
-	data, unlock, err := s.Controller.EncodeHeaders(enumHeaders)
+	data, unlock, err := s.controller.EncodeHeaders(enumHeaders)
 	defer unlock()
 	if err != nil {
 		return err
@@ -131,14 +130,14 @@ func (s *Stream) WriteHeaders(ctx context.Context, enumHeaders func(func(k, v st
 			default:
 			}
 			chunk := data
-			maxWriteFrameSz := int(s.GetWriteSetting(http2.SettingMaxFrameSize))
+			maxWriteFrameSz := int(s.controller.GetWriteSetting(http2.SettingMaxFrameSize))
 			if len(chunk) > maxWriteFrameSz {
 				chunk = chunk[:maxWriteFrameSz]
 			}
 			data = data[len(chunk):]
 			endHeaders := len(data) == 0
 			if first {
-				err := s.Controller.WriteHeaders(http2.HeadersFrameParam{
+				err := s.controller.WriteHeaders(http2.HeadersFrameParam{
 					StreamID:      s.streamID,
 					BlockFragment: chunk,
 					EndStream:     last,
@@ -148,7 +147,7 @@ func (s *Stream) WriteHeaders(ctx context.Context, enumHeaders func(func(k, v st
 					return err
 				}
 				first = false
-			} else if err := s.WriteContinuation(s.streamID, endHeaders, chunk); err != nil {
+			} else if err := s.controller.WriteContinuation(s.streamID, endHeaders, chunk); err != nil {
 				return err
 			}
 		}
@@ -206,7 +205,7 @@ func getBodyWriteBuf(sz int) (b []byte, put func(interface{})) {
 func (s *Stream) WriteRequestBody(ctx context.Context, data io.Reader, sz int64, last bool) error {
 	return s.writeCtx(ctx, func(ctx context.Context) error {
 		read := int64(0)
-		maxWriteFrameSz := int(s.GetWriteSetting(http2.SettingMaxFrameSize))
+		maxWriteFrameSz := int(s.controller.GetWriteSetting(http2.SettingMaxFrameSize))
 		bufSz := maxWriteFrameSz
 		if sz != -1 {
 			bufSz = min(bufSz, int(sz))
@@ -223,7 +222,7 @@ func (s *Stream) WriteRequestBody(ctx context.Context, data io.Reader, sz int64,
 			endStream := last && err == io.EOF
 			if l != 0 || endStream {
 				read += int64(l)
-				err := s.Controller.WriteData(s.streamID, endStream, chunk[:l])
+				err := s.controller.WriteData(s.streamID, endStream, chunk[:l])
 				if err != nil {
 					s.Reset(http2.ErrCodeProtocol, false)
 					return err
