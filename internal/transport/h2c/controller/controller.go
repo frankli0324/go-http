@@ -19,6 +19,7 @@ func NewController(c net.Conn) *Controller {
 	conn.hpackMixin.init(conn)
 	conn.framerMixin.init(conn)
 	conn.pingMixin.init(conn)
+	conn.flowControlMixin.init(conn)
 	conn.on[http2.FrameGoAway] = func(frame http2.Frame) {
 		conn.doneOnce.Do(func() {
 			frame := frame.(*http2.GoAwayFrame)
@@ -52,6 +53,7 @@ type Controller struct {
 	framerMixin
 	hpackMixin
 	pingMixin
+	flowControlMixin // only for control stream (streamID=0)
 
 	settingsMixin
 
@@ -166,7 +168,18 @@ func (c *Controller) OnStreamReset(cb func(*http2.RSTStreamFrame)) {
 
 func (c *Controller) OnData(cb func(*http2.DataFrame)) {
 	c.on[http2.FrameData] = func(f http2.Frame) {
-		cb(f.(*http2.DataFrame))
+		frame := f.(*http2.DataFrame)
+		dl := uint32(len(frame.Data()))
+		if !c.flowControlMixin.in.stage(dl) {
+			c.GoAway(0, http2.ErrCodeFlowControl)
+		} else {
+			cb(frame)
+		}
+		if inc := c.in.grant(uint32(len(frame.Data()))); inc != 0 {
+			if err := c.WriteWindowUpdate(0, inc); err != nil {
+				c.GoAway(0, http2.ErrCodeFlowControl)
+			}
+		}
 	}
 }
 
@@ -178,4 +191,16 @@ func (c *Controller) OnHeader(cb func(*http2.MetaHeadersFrame)) {
 		}
 		panic("unexpected frame, framer should return meta headers frame")
 	}
+}
+
+func (c *Controller) WriteData(streamID uint32, endStream bool, data []byte) error {
+	// wraps framer WriteData for connection level flow control
+	for len(data) != 0 {
+		bat := c.flowControlMixin.out.take(int32(len(data)))
+		if err := c.framerMixin.WriteData(streamID, endStream, data[:bat]); err != nil {
+			return err
+		}
+		data = data[bat:]
+	}
+	return nil
 }

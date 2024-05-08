@@ -10,6 +10,10 @@ type settingsMixin struct {
 	writeSettings, readSettings *settings
 }
 
+func (s settingsMixin) GetReadSetting(id http2.SettingID) uint32 {
+	return s.readSettings.GetSetting(id)
+}
+
 func (s settingsMixin) GetWriteSetting(id http2.SettingID) uint32 {
 	return s.writeSettings.GetSetting(id)
 }
