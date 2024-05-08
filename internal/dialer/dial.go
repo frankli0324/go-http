@@ -91,14 +91,21 @@ func (d *CoreDialer) Dial(ctx context.Context, r *http.PreparedRequest) (io.Read
 	if t, ok := re.Raw().(*h2c.Connection); ok {
 		// is *tls.Conn or polyfilled TLS Connection
 		c, err := t.Stream()
-		re.Release()
-		return (*wStream)(c), err
+		if err == nil {
+			re.Release()
+			return (*wStream)(c), err
+		} else if ctx.Value(isRetry{}) == nil { // maybe connection fail, try dial new connection
+			return d.Dial(context.WithValue(ctx, isRetry{}, true), r)
+		}
+		return nil, err
 	}
 	return readWriteCloser{
 		ReadWriter: re,
 		close:      func() error { re.Release(); return nil },
 	}, nil
 }
+
+type isRetry struct{}
 
 // helper
 type wStream h2c.Stream

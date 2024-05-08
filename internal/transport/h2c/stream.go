@@ -12,7 +12,7 @@ import (
 	"golang.org/x/net/http2"
 )
 
-func newStream(c *controller.Controller, id uint32) *Stream {
+func newStream(c *controller.Controller, id uint32, done func()) *Stream {
 	r, w := io.Pipe()
 	return &Stream{
 		Controller: c, streamID: id,
@@ -20,7 +20,8 @@ func newStream(c *controller.Controller, id uint32) *Stream {
 
 		dataReader: r, dataWriter: w,
 
-		done: make(chan interface{}),
+		done:   make(chan interface{}),
+		doneCB: done,
 	}
 }
 
@@ -42,6 +43,7 @@ type Stream struct {
 	}
 	doneOnce sync.Once
 	done     chan interface{} // either us or them reset the stream
+	doneCB   func()
 }
 
 func (s *Stream) Valid() bool {
@@ -69,7 +71,10 @@ func (s *Stream) Write(b []byte) (n int, err error) {
 }
 
 func (s *Stream) Close() error {
-	s.doneOnce.Do(func() { close(s.done) })
+	s.doneOnce.Do(func() {
+		close(s.done)
+		s.doneCB()
+	})
 	return nil
 }
 
@@ -80,7 +85,7 @@ func (s *Stream) Reset(code http2.ErrCode, isReceived bool) (err error) {
 		}
 		s.doneReason.code = code
 		s.doneReason.remote = isReceived
-		s.doneOnce.Do(func() { close(s.done) })
+		s.Close()
 	})
 	return err
 }
@@ -202,7 +207,11 @@ func (s *Stream) WriteRequestBody(ctx context.Context, data io.Reader, sz int64,
 	return s.writeCtx(ctx, func(ctx context.Context) error {
 		read := int64(0)
 		maxWriteFrameSz := int(s.GetWriteSetting(http2.SettingMaxFrameSize))
-		chunk, put := getBodyWriteBuf(maxWriteFrameSz)
+		bufSz := maxWriteFrameSz
+		if sz != -1 {
+			bufSz = min(bufSz, int(sz))
+		}
+		chunk, put := getBodyWriteBuf(bufSz)
 		defer put(&chunk)
 		for {
 			select {
