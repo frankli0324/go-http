@@ -109,7 +109,8 @@ func (s *Stream) writeCtx(ctx context.Context, writeAction func(context.Context)
 
 // TODO: maybe change this api
 func (s *Stream) WriteHeaders(ctx context.Context, enumHeaders func(func(k, v string)), last bool) error {
-	data, err := s.Controller.EncodeHeaders(enumHeaders)
+	data, unlock, err := s.Controller.EncodeHeaders(enumHeaders)
+	defer unlock()
 	if err != nil {
 		return err
 	}

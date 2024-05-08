@@ -36,9 +36,8 @@ func (h *hpackMixin) init(c *Controller) {
 }
 
 // EncodeHeaders encodes HEADERS frame BlockFragment
-func (h *hpackMixin) EncodeHeaders(enumHeaders func(func(k, v string))) ([]byte, error) {
+func (h *hpackMixin) EncodeHeaders(enumHeaders func(func(k, v string))) ([]byte, func(), error) {
 	h.muWbuf.Lock()
-	defer h.muWbuf.Unlock()
 	h.wBuf.Reset()
 
 	total := uint32(0)
@@ -48,10 +47,10 @@ func (h *hpackMixin) EncodeHeaders(enumHeaders func(func(k, v string))) ([]byte,
 		// if total > settings.max header size { error }
 	})
 	if total > h.maxWriteHeaderListSize {
-		return nil, errors.New("http2: request header list larger than peer's advertised limit")
+		return nil, nil, errors.New("http2: request header list larger than peer's advertised limit")
 	}
 	enumHeaders(func(name, value string) {
 		h.hpEnc.WriteField(hpack.HeaderField{Name: name, Value: value})
 	})
-	return h.wBuf.Bytes(), nil
+	return h.wBuf.Bytes(), h.muWbuf.Unlock, nil
 }
