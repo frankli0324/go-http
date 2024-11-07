@@ -1,8 +1,7 @@
-package http
+package dialer
 
 import (
 	"github.com/frankli0324/go-http/internal/dialer"
-	"github.com/frankli0324/go-http/internal/http"
 )
 
 // Dialers are responsible for creating underlying streams that http requests could
@@ -13,7 +12,7 @@ import (
 // which means a Dialer must be able to be swapped out from a [Client] without
 // pain. Like [net/http.Transport], it SHOULD hold the connection related configs
 // like [ProxyConfiguration] or *[net/tls.Config].
-type Dialer = http.Dialer
+type Dialer = dialer.Dialer
 
 // CoreDialer is the default implementation of the [Dialer] interface. It would
 // be used by a zero value [Client].

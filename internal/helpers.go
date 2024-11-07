@@ -3,16 +3,17 @@ package internal
 import (
 	"context"
 
+	"github.com/frankli0324/go-http/internal/dialer"
 	"github.com/frankli0324/go-http/internal/http"
 )
 
 // UseCoreDialer is a shortcut to [UseDialer] that unwraps the current dialer until it meets a [*CoreDialer]
 // returns false if no [*CoreDialer] is found
-func (c *Client) UseCoreDialer(set func(*CoreDialer) http.Dialer) (ok bool) {
-	c.UseDialer(func(d http.Dialer) http.Dialer {
+func (c *Client) UseCoreDialer(set func(*dialer.CoreDialer) dialer.Dialer) (ok bool) {
+	c.UseDialer(func(d dialer.Dialer) dialer.Dialer {
 		cd := d
 		for cd != nil {
-			if d, isCoreD := cd.(*CoreDialer); isCoreD {
+			if d, isCoreD := cd.(*dialer.CoreDialer); isCoreD {
 				ok = true
 				return set(d)
 			}
@@ -24,7 +25,7 @@ func (c *Client) UseCoreDialer(set func(*CoreDialer) http.Dialer) (ok bool) {
 }
 
 func (c *Client) DisableH2() (ok bool) {
-	c.UseCoreDialer(func(d *CoreDialer) http.Dialer {
+	c.UseCoreDialer(func(d *dialer.CoreDialer) dialer.Dialer {
 		np := d.TLSConfig.NextProtos
 		if len(np) == 1 && np[0] == "h2" {
 			d.TLSConfig.NextProtos = nil
@@ -44,7 +45,7 @@ func (c *Client) DisableH2() (ok bool) {
 }
 
 func (c *Client) UseGetProxy(getProxy func(ctx context.Context, r *http.Request) (string, error)) (ok bool) {
-	return c.UseCoreDialer(func(d *CoreDialer) http.Dialer {
+	return c.UseCoreDialer(func(d *dialer.CoreDialer) dialer.Dialer {
 		d.GetProxy = getProxy
 		return d
 	})

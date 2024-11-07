@@ -1,16 +1,14 @@
 package http
 
 import (
-	"context"
 	"io"
 	"net/http"
 )
 
-type Dialer interface {
-	Dial(ctx context.Context, r *PreparedRequest) (io.ReadWriteCloser, error)
-	Unwrap() Dialer
-}
-
+// Request is an object holding minimal information a request contains.
+// it should not contain connection related information, such as
+// proxies, context, response, connection info and "Close". it should
+// be handled instead by [Dialer]s.
 type Request struct {
 	Method string
 	URL    string

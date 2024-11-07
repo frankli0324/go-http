@@ -3,9 +3,19 @@ package dialer
 import (
 	"context"
 	"crypto/tls"
+	"io"
 
 	"github.com/frankli0324/go-http/internal/http"
 )
+
+// Dialers handle pretty much everything related to the actual connection,
+// including setting a proxy for each request, setting resolvers, etc.
+type Dialer interface {
+	// Dial returns an abstract stream for writing the request and reading responses.
+	// the implementation of this stream could be specific to protocols.
+	Dial(ctx context.Context, r *http.PreparedRequest) (io.ReadWriteCloser, error)
+	Unwrap() Dialer
+}
 
 type CoreDialer struct {
 	ResolveConfig *ResolveConfig
@@ -25,6 +35,6 @@ func (d *CoreDialer) Clone() *CoreDialer {
 	}
 }
 
-func (d *CoreDialer) Unwrap() http.Dialer {
+func (d *CoreDialer) Unwrap() Dialer {
 	return nil
 }

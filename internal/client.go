@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 
+	"github.com/frankli0324/go-http/internal/dialer"
 	"github.com/frankli0324/go-http/internal/http"
 	"github.com/frankli0324/go-http/internal/transport"
 )
@@ -11,7 +12,7 @@ import (
 type PreparedRequest = http.PreparedRequest
 
 type Client struct {
-	dialer http.Dialer
+	dialer dialer.Dialer
 }
 
 // UseDialer provides the interface to modify the dialer used for
@@ -28,7 +29,7 @@ type Client struct {
 //
 // For example, http2 can be disabled by removing the "h2" from
 // tls ALPN. See how it is be done in [Client.DisableH2].
-func (c *Client) UseDialer(wrap func(http.Dialer) http.Dialer) {
+func (c *Client) UseDialer(wrap func(dialer.Dialer) dialer.Dialer) {
 	if c.dialer != nil {
 		c.dialer = wrap(c.dialer)
 	} else {

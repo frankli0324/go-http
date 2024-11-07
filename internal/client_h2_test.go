@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/frankli0324/go-http/internal"
+	"github.com/frankli0324/go-http/internal/dialer"
 	"github.com/frankli0324/go-http/internal/http"
 )
 
@@ -20,7 +21,7 @@ func TestClientHTTP2(t *testing.T) {
 	server.StartTLS()
 
 	client := &internal.Client{}
-	client.UseCoreDialer(func(cd *internal.CoreDialer) http.Dialer {
+	client.UseCoreDialer(func(cd *dialer.CoreDialer) dialer.Dialer {
 		cd.TLSConfig.RootCAs, _ = x509.SystemCertPool()
 		cd.TLSConfig.RootCAs.AddCert(server.Certificate())
 		return cd

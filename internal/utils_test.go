@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/frankli0324/go-http/internal"
+	"github.com/frankli0324/go-http/internal/dialer"
 	"github.com/frankli0324/go-http/internal/http"
 )
 
@@ -26,7 +27,7 @@ func (t *TestDialer) Dial(ctx context.Context, r *http.PreparedRequest) (io.Read
 }
 
 // Unwrap implements internal.Dialer.
-func (t *TestDialer) Unwrap() http.Dialer {
+func (t *TestDialer) Unwrap() dialer.Dialer {
 	return nil
 }
 
@@ -36,7 +37,7 @@ func SendSingleRequest(t *testing.T, req *http.Request) io.Reader {
 
 	readRequest, writeRequest := io.Pipe()
 	c := &internal.Client{}
-	c.UseDialer(func(http.Dialer) http.Dialer {
+	c.UseDialer(func(dialer.Dialer) dialer.Dialer {
 		return &TestDialer{CombinedReadWriteCloser{
 			Reader: readResponse,
 			Writer: writeRequest,

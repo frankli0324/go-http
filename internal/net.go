@@ -9,9 +9,7 @@ import (
 	"github.com/frankli0324/go-http/internal/transport/h2c"
 )
 
-type CoreDialer = dialer.CoreDialer
-
-var defaultDialer = &CoreDialer{
+var defaultDialer = &dialer.CoreDialer{
 	TLSConfig: &tls.Config{
 		NextProtos: []string{"h2", "http/1.1"},
 	},
