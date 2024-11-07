@@ -14,7 +14,14 @@ import (
 
 type H2C struct{}
 
-func (h *H2C) ReadResponse(ctx context.Context, r io.ReadCloser, req *http.PreparedRequest, resp *http.Response) error {
+func (t H2C) RoundTrip(ctx context.Context, w io.Writer, req *http.PreparedRequest, r io.ReadCloser, resp *http.Response) error {
+	if err := t.WriteRequest(ctx, w, req); err != nil {
+		return err
+	}
+	return t.ReadResponse(ctx, r, req, resp)
+}
+
+func (h H2C) ReadResponse(ctx context.Context, r io.ReadCloser, req *http.PreparedRequest, resp *http.Response) error {
 	s, ok := getRawConn(r).(*h2c.Stream)
 	if !ok {
 		return errors.New("can only read response from h2 stream")
@@ -43,11 +50,14 @@ func (h *H2C) ReadResponse(ctx context.Context, r io.ReadCloser, req *http.Prepa
 		return err
 	}
 
-	resp.Body = s.ResponseBodyStream(ctx)
+	resp.Body = bodyCloser{
+		s.ResponseBodyStream(ctx),
+		func() error { return r.Close() },
+	}
 	return nil
 }
 
-func (h *H2C) WriteRequest(ctx context.Context, w io.WriteCloser, req *http.PreparedRequest) error {
+func (h H2C) WriteRequest(ctx context.Context, w io.Writer, req *http.PreparedRequest) error {
 	s, ok := getRawConn(w).(*h2c.Stream)
 	if !ok {
 		return errors.New("can only write request to h2 stream")

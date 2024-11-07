@@ -17,7 +17,14 @@ import (
 
 type HTTP1 struct{}
 
-func (t *HTTP1) WriteRequest(ctx context.Context, w io.WriteCloser, r *http.PreparedRequest) error {
+func (t HTTP1) RoundTrip(ctx context.Context, w io.Writer, req *http.PreparedRequest, r io.ReadCloser, resp *http.Response) error {
+	if err := t.WriteRequest(ctx, w, req); err != nil {
+		return err
+	}
+	return t.ReadResponse(ctx, r, req, resp)
+}
+
+func (t HTTP1) WriteRequest(ctx context.Context, w io.Writer, r *http.PreparedRequest) error {
 	body, err := r.GetBody() // can write body
 	if err != nil {
 		return err
@@ -53,11 +60,11 @@ func (t *HTTP1) WriteRequest(ctx context.Context, w io.WriteCloser, r *http.Prep
 		}
 	}
 
-	return w.Close()
+	return nil
 }
 
 // mimic stdlib behavior
-func (t *HTTP1) expectContentLength(r *http.PreparedRequest) bool {
+func (t HTTP1) expectContentLength(r *http.PreparedRequest) bool {
 	if r.Method == "POST" || r.Method == "PUT" || r.Method == "PATCH" {
 		return true
 	}
@@ -80,7 +87,7 @@ func (t *HTTP1) expectContentLength(r *http.PreparedRequest) bool {
 //	Host: www.google.com\r\n
 //	X-Xx-Yy: cccccc\r\n
 //	\r\n
-func (t *HTTP1) writeHeader(w io.Writer, r *http.PreparedRequest) error {
+func (t HTTP1) writeHeader(w io.Writer, r *http.PreparedRequest) error {
 	header := bufio.NewWriter(w) // default bufsize is 4096
 
 	if _, err := header.WriteString(r.Method); err != nil {
@@ -123,7 +130,7 @@ func (t *HTTP1) writeHeader(w io.Writer, r *http.PreparedRequest) error {
 	return nil
 }
 
-func (t *HTTP1) ReadResponse(ctx context.Context, r io.ReadCloser, req *http.PreparedRequest, resp *http.Response) (err error) {
+func (t HTTP1) ReadResponse(ctx context.Context, r io.ReadCloser, req *http.PreparedRequest, resp *http.Response) (err error) {
 	tp := textproto.NewReader(bufio.NewReader(r))
 	if err := t.readHeader(tp, resp); err != nil {
 		return err
@@ -140,7 +147,7 @@ func (t *HTTP1) ReadResponse(ctx context.Context, r io.ReadCloser, req *http.Pre
 	return t.readTransfer(tp.R, r, req, resp)
 }
 
-func (t *HTTP1) readHeader(tp *textproto.Reader, resp *http.Response) error {
+func (t HTTP1) readHeader(tp *textproto.Reader, resp *http.Response) error {
 	line, err := tp.ReadLine()
 	if err != nil {
 		if err == io.EOF {
@@ -182,7 +189,7 @@ func (t *HTTP1) readHeader(tp *textproto.Reader, resp *http.Response) error {
 	return nil
 }
 
-func (t *HTTP1) readTransfer(br *bufio.Reader, r io.ReadCloser, req *http.PreparedRequest, resp *http.Response) error {
+func (t HTTP1) readTransfer(br *bufio.Reader, r io.ReadCloser, req *http.PreparedRequest, resp *http.Response) error {
 	closer := func(body io.Reader) io.ReadCloser { return bodyCloser{body, r.Close} }
 	closeCloser := closer
 	if cr, ok := r.(interface{ Raw() net.Conn }); ok { // can get underlying connection

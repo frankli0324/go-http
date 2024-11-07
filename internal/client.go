@@ -71,13 +71,12 @@ func (c *Client) CtxDo(ctx context.Context, req *http.Request) (*http.Response, 
 	}
 
 	tr := c.transport(proto)
-	if err := tr.WriteRequest(ctx, conn, pr); err != nil {
-		return nil, err
-	} else {
-		resp := &http.Response{}
-		if err = tr.ReadResponse(ctx, conn, pr, resp); err != nil {
+	resp := &http.Response{}
+	if err := tr.RoundTrip(ctx, conn, pr, conn, resp); err != nil {
+		if resp.Body != nil {
 			resp.Body.Close()
 		}
-		return resp, err
+		return nil, err
 	}
+	return resp, nil
 }
