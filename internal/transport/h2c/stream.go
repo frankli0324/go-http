@@ -3,26 +3,13 @@ package h2c
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"log"
 	"sync"
 
+	errs "github.com/frankli0324/go-http/internal/transport/h2c/errors"
 	"golang.org/x/net/http2"
 )
-
-func newStream(c *Connection, id uint32, done func()) *Stream {
-	r, w := io.Pipe()
-	return &Stream{
-		Connection: c, streamID: id,
-		chanHeaders: make(chan *http2.MetaHeadersFrame),
-
-		dataReader: r, dataWriter: w,
-
-		done:   make(chan interface{}),
-		doneCB: done,
-	}
-}
 
 type Stream struct {
 	*Connection
@@ -30,19 +17,16 @@ type Stream struct {
 
 	// TODO: don't block receiving loop
 	chanHeaders chan *http2.MetaHeadersFrame
-	dataWriter  *io.PipeWriter
-	dataReader  *io.PipeReader
+	respWriter  *io.PipeWriter // http2 frame read loop write data
+	respReader  *io.PipeReader // user read data
 
 	rstOnce sync.Once
 
-	doneReason struct {
-		rst    bool
-		code   http2.ErrCode
-		remote bool
-	}
-	doneOnce sync.Once
-	done     chan interface{} // either us or them reset the stream
-	doneCB   func()
+	doneReason error
+	doneOnce   sync.Once
+
+	done   chan interface{} // either us or them reset the stream
+	doneCB func()
 }
 
 func (s *Stream) Valid() bool {
@@ -70,7 +54,12 @@ func (s *Stream) Write(b []byte) (n int, err error) {
 }
 
 func (s *Stream) Close() error {
+	return s.CloseWithError(nil)
+}
+
+func (s *Stream) CloseWithError(err error) error {
 	s.doneOnce.Do(func() {
+		s.doneReason = err
 		close(s.done)
 		s.doneCB()
 	})
@@ -82,9 +71,7 @@ func (s *Stream) Reset(code http2.ErrCode, isReceived bool) (err error) {
 		if !isReceived {
 			err = s.controller.WriteRSTStream(s.streamID, code)
 		}
-		s.doneReason.code = code
-		s.doneReason.remote = isReceived
-		s.Close()
+		s.CloseWithError(errs.ErrStreamResetRemote)
 	})
 	return err
 }
@@ -100,12 +87,12 @@ func (s *Stream) writeCtx(ctx context.Context, writeAction func(context.Context)
 	}()
 	select {
 	case <-ctx.Done():
-		return ErrStreamCancelled.Wrap(s.Reset(http2.ErrCodeCancel, false))
+		return errs.ErrStreamCancelled.Wrap(s.Reset(http2.ErrCodeCancel, false))
 	case err := <-errCh:
 		if err == errReturnEarly {
-			return ErrStreamCancelled.Wrap(s.Reset(http2.ErrCodeCancel, false))
+			return errs.ErrStreamCancelled.Wrap(s.Reset(http2.ErrCodeCancel, false))
 		} else if err == errReqBodyTooLong {
-			return ErrStreamCancelled.Wrap(err)
+			return errs.ErrStreamCancelled.Wrap(err)
 		}
 		return err
 	}
@@ -129,13 +116,15 @@ func (s *Stream) WriteHeaders(ctx context.Context, enumHeaders func(func(k, v st
 				return errReturnEarly
 			default:
 			}
-			chunk := data
-			maxWriteFrameSz := int(s.controller.GetWriteSetting(http2.SettingMaxFrameSize))
-			if len(chunk) > maxWriteFrameSz {
-				chunk = chunk[:maxWriteFrameSz]
+			var chunk []byte
+
+			maxWriteFrameSz := int(s.controller.GetPeerSetting(http2.SettingMaxFrameSize))
+			endHeaders := len(data) <= maxWriteFrameSz
+			if !endHeaders {
+				chunk, data = data[:maxWriteFrameSz], data[maxWriteFrameSz:]
+			} else {
+				chunk, data = data, nil
 			}
-			data = data[len(chunk):]
-			endHeaders := len(data) == 0
 			if first {
 				err := s.controller.WriteHeaders(http2.HeadersFrameParam{
 					StreamID:      s.streamID,
@@ -159,14 +148,9 @@ func (s *Stream) WriteHeaders(ctx context.Context, enumHeaders func(func(k, v st
 func (s *Stream) ReadHeaders(ctx context.Context, headersCb func(k, v string) error) error {
 	select {
 	case <-ctx.Done():
-		return ErrStreamCancelled.Wrap(s.Reset(http2.ErrCodeCancel, false))
+		return errs.ErrStreamCancelled.Wrap(s.Reset(http2.ErrCodeCancel, false))
 	case <-s.done:
-		if s.doneReason.rst {
-			return ErrStreamReset.Wrap(fmt.Errorf(
-				"initiated by remote:%t, code:%s", s.doneReason.remote, s.doneReason.code.String(),
-			))
-		}
-		return nil
+		return s.doneReason
 	case headers := <-s.chanHeaders:
 		for _, kv := range headers.Fields {
 			if err := headersCb(kv.Name, kv.Value); err != nil {
@@ -205,7 +189,7 @@ func getBodyWriteBuf(sz int) (b []byte, put func(interface{})) {
 func (s *Stream) WriteRequestBody(ctx context.Context, data io.Reader, sz int64, last bool) error {
 	return s.writeCtx(ctx, func(ctx context.Context) error {
 		read := int64(0)
-		maxWriteFrameSz := int(s.controller.GetWriteSetting(http2.SettingMaxFrameSize))
+		maxWriteFrameSz := int(s.controller.GetPeerSetting(http2.SettingMaxFrameSize))
 		bufSz := maxWriteFrameSz
 		if sz != -1 {
 			bufSz = min(bufSz, int(sz))
@@ -247,6 +231,7 @@ func (s *Stream) WriteRequestBody(ctx context.Context, data io.Reader, sz int64,
 }
 
 // TODO: maybe change this api
-func (s *Stream) ReadData(ctx context.Context) io.ReadCloser {
-	return s.dataReader
+func (s *Stream) ResponseBodyStream(ctx context.Context) io.ReadCloser {
+	// TODO: close response reader if error occurrs: remote closed, self cancelled, etc.
+	return s.respReader
 }

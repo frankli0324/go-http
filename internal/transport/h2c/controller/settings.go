@@ -7,18 +7,18 @@ import (
 )
 
 func newSettingsMixin(c *Controller) settingsMixin {
-	return settingsMixin{newWriteSettings(c), newReadSettings(c)}
+	return settingsMixin{newPeerSettings(c), newSelfSettings(c)}
 }
 
 type settingsMixin struct {
-	writeSettings, readSettings *settings
+	peerSettings, selfSettings *settings
 }
 
-// GetWriteSetting is Locked
-func (s settingsMixin) GetWriteSetting(id http2.SettingID) uint32 {
-	s.writeSettings.mu.RLock()
-	defer s.writeSettings.mu.RUnlock()
-	return s.writeSettings.GetSetting(id)
+func (s settingsMixin) GetPeerSetting(id http2.SettingID) uint32 {
+	return s.peerSettings.GetSetting(id)
+}
+func (s settingsMixin) GetSelfSetting(id http2.SettingID) uint32 {
+	return s.selfSettings.GetSetting(id)
 }
 
 func (s settingsMixin) ConfigureReadSetting(id http2.SettingID, val uint32) error {
@@ -27,16 +27,19 @@ func (s settingsMixin) ConfigureReadSetting(id http2.SettingID, val uint32) erro
 	if err := (http2.Setting{ID: id, Val: val}).Valid(); err != nil {
 		return err
 	}
-	s.readSettings.settings[id] = val
+	s.selfSettings.settings[id] = val
+	for _, v := range s.selfSettings.on[id] {
+		v(val)
+	}
 	return nil
 }
 
-func (s settingsMixin) AdvertiseReadSettings(c *Controller) error {
+func (s settingsMixin) AdvertiseSelfSettings(c *Controller) error {
 	settings := make([]http2.Setting, 0, 8)
 	for id := 1; id <= 6; id++ {
 		setting := http2.Setting{
 			ID:  http2.SettingID(id),
-			Val: s.readSettings.settings[id],
+			Val: s.selfSettings.settings[id],
 		}
 		if setting.Valid() == nil {
 			settings = append(settings, setting)
@@ -45,19 +48,19 @@ func (s settingsMixin) AdvertiseReadSettings(c *Controller) error {
 	return c.WriteSettings(settings...)
 }
 
-func newReadSettings(_ *Controller) *settings {
+func newSelfSettings(_ *Controller) *settings {
 	s := [8]uint32{}
 	s[http2.SettingHeaderTableSize] = 4096
 	s[http2.SettingEnablePush] = 0
 	s[http2.SettingMaxConcurrentStreams] = 1000
 	s[http2.SettingInitialWindowSize] = 4 << 20
 	s[http2.SettingMaxFrameSize] = 10 << 20
-	s[http2.SettingMaxHeaderListSize] = 10 << 20
+	s[http2.SettingMaxHeaderListSize] = 10 << 20 // allow response header to be at most 10MB, whi
 	return &settings{settings: s}
 }
 
-// newWriteSettings creates a settings instance with default values
-func newWriteSettings(c *Controller) *settings {
+// newPeerSettings creates a settings instance with default values
+func newPeerSettings(c *Controller) *settings {
 	s := [8]uint32{}
 	s[http2.SettingHeaderTableSize] = 4096
 	s[http2.SettingEnablePush] = 1
@@ -72,9 +75,11 @@ func newWriteSettings(c *Controller) *settings {
 		if sf.IsAck() {
 			return
 		}
-		// TODO: reject invalid settings
-		settings.UpdateFrom(sf)
-		_ = c.WriteSettingsAck()
+		if err := settings.UpdateFrom(sf); err != nil {
+			c.GoAwayDebug(0, http2.ErrCodeProtocol, []byte("invalid settings"))
+		} else {
+			_ = c.WriteSettingsAck()
+		}
 		// TODO: error acking settings frame
 	}
 	return settings
@@ -97,10 +102,13 @@ func (s *settings) On(id http2.SettingID, do func(value uint32)) {
 	s.on[id] = append(s.on[id], do)
 }
 
-func (s *settings) UpdateFrom(frame *http2.SettingsFrame) {
+func (s *settings) UpdateFrom(frame *http2.SettingsFrame) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	frame.ForeachSetting(func(i http2.Setting) error {
+	return frame.ForeachSetting(func(i http2.Setting) error {
+		if err := i.Valid(); err != nil {
+			return err
+		}
 		for _, v := range s.on[i.ID] {
 			v(i.Val)
 		}
@@ -135,5 +143,7 @@ func (s *settings) MaxHeaderListSize() uint32 {
 }
 
 func (s *settings) GetSetting(id http2.SettingID) uint32 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	return s.settings[id]
 }

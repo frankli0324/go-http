@@ -1,14 +1,16 @@
 package h2c
 
 import (
+	"io"
 	"net"
 	"sync"
+	"sync/atomic"
 
 	"github.com/frankli0324/go-http/internal/transport/h2c/controller"
 	"golang.org/x/net/http2"
 )
 
-func NewConn(c net.Conn) *Connection {
+func NewConnection(c net.Conn) *Connection {
 	ctrl := controller.NewController(c)
 	conn := &Connection{
 		Conn:          c,
@@ -21,7 +23,7 @@ func NewConn(c net.Conn) *Connection {
 		conn.withStream(frame.StreamID, func(active *Stream) error {
 			active.chanHeaders <- frame
 			if frame.StreamEnded() {
-				active.dataWriter.Close() // no body
+				active.respWriter.Close() // no body
 				active.Close()
 			}
 			return nil
@@ -29,20 +31,33 @@ func NewConn(c net.Conn) *Connection {
 	})
 	ctrl.OnData(func(frame *http2.DataFrame) {
 		conn.withStream(frame.StreamID, func(active *Stream) error {
-			if _, err := active.dataWriter.Write(frame.Data()); err != nil {
+			ctrl.WriteWindowUpdate(frame.StreamID, frame.Length) // TODO: stream level flow control
+			if _, err := active.respWriter.Write(frame.Data()); err != nil {
 				return err
 			}
 			if frame.StreamEnded() {
-				active.dataWriter.Close()
+				active.respWriter.Close()
 				active.Close()
 			}
 			return nil
 		})
-	})
+	}, func(ec http2.ErrCode) { conn.GoAway(ec) })
 	ctrl.OnStreamReset(func(frame *http2.RSTStreamFrame) {
-		conn.withStream(frame.StreamID, func(active *Stream) error {
-			return active.Reset(frame.ErrCode, true)
-		})
+		if frame.ErrCode != http2.ErrCodeNo {
+			conn.withStream(frame.StreamID, func(active *Stream) error {
+				return active.Reset(frame.ErrCode, true)
+			})
+		}
+	})
+	ctrl.OnRemoteGoAway(func(u uint32, err http2.ErrCode) {
+		conn.muActive.Lock()
+		for id, stream := range conn.activeStreams {
+			if id > u {
+				stream.Reset(err, true)
+				delete(conn.activeStreams, id)
+			}
+		}
+		conn.muActive.Unlock()
 	})
 	return conn
 }
@@ -55,6 +70,8 @@ type Connection struct {
 	activeStreams map[uint32]*Stream
 	muActive      sync.RWMutex
 	condActive    *sync.Cond
+
+	muNewStream sync.Mutex // should be held when assigning a new stream ID
 }
 
 func (c *Connection) Handshake() error {
@@ -66,8 +83,7 @@ func (c *Connection) withStream(streamID uint32, f func(*Stream) error) {
 	c.muActive.RLock()
 	active := c.activeStreams[streamID]
 	c.muActive.RUnlock()
-	// active.Lock() // if not synchornous, need lock
-	// defer active.Unlock()
+
 	if !active.Valid() {
 		c.controller.WriteRSTStream(streamID, http2.ErrCodeStreamClosed)
 		// if err goaway
@@ -80,21 +96,14 @@ func (c *Connection) Stream() (*Stream, error) {
 	if err := c.controller.Valid(); err != nil {
 		return nil, err
 	}
-	c.muActive.Lock()
-	for len(c.activeStreams) >= int(c.controller.GetWriteSetting(http2.SettingMaxConcurrentStreams)) {
-		c.condActive.Wait()
+	r, w := io.Pipe()
+	s := &Stream{
+		Connection:  c,
+		chanHeaders: make(chan *http2.MetaHeadersFrame),
+		done:        make(chan interface{}),
+		respReader:  r,
+		respWriter:  w,
 	}
-	c.lastStreamID += 2
-	streamID := uint32(c.lastStreamID)
-	// TODO: check streamid inside 2^31 and match connection setting
-	s := newStream(c, streamID, func() {
-		c.muActive.Lock()
-		delete(c.activeStreams, streamID)
-		c.muActive.Unlock()
-		c.condActive.Signal()
-	})
-	c.activeStreams[streamID] = s
-	c.muActive.Unlock()
 	// TODO: rfc7540 6.9.2
 	// In addition to changing the flow-control window for streams that are not yet active,
 	// a SETTINGS frame can alter the initial flow-control window size for streams with
@@ -105,13 +114,32 @@ func (c *Connection) Stream() (*Stream, error) {
 	return s, nil
 }
 
+func (c *Connection) AssignStreamID(s *Stream) func() {
+	c.muActive.Lock()
+	for len(c.activeStreams) >= int(c.controller.GetPeerSetting(http2.SettingMaxConcurrentStreams)) {
+		c.condActive.Wait()
+	}
+	c.muNewStream.Lock()
+	s.streamID = uint32(atomic.AddInt32(&c.lastStreamID, 2))
+	s.doneCB = func() {
+		c.muActive.Lock()
+		delete(c.activeStreams, s.streamID)
+		c.muActive.Unlock()
+		c.condActive.Signal()
+	}
+	// TODO: check streamid inside 2^31 and match connection setting
+	c.activeStreams[s.streamID] = s
+	c.muActive.Unlock()
+	return c.muNewStream.Unlock
+}
+
 func (c *Connection) Close() error {
 	// never close unless goaway
 	return nil
 }
 
-func (c *Connection) GoAway() error {
-	return c.controller.GoAway(uint32(c.lastStreamID), http2.ErrCodeNo)
+func (c *Connection) GoAway(code http2.ErrCode) error {
+	return c.controller.GoAway(uint32(atomic.LoadInt32(&c.lastStreamID)), code)
 }
 
 // ShouldProcess checks if stream should be retried on a new connection
@@ -120,5 +148,5 @@ func (c *Connection) ShouldProcess(streamID uint32) bool {
 	if c.controller.Valid() == nil {
 		return true
 	}
-	return uint32(c.lastStreamID) >= streamID
+	return uint32(atomic.LoadInt32(&c.lastStreamID)) >= streamID
 }

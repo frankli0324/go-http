@@ -100,8 +100,8 @@ func (fm *outflow) put(sz int32) bool {
 
 // flowControlMixin only implements flow control for control frames, that is, streamID=0
 type flowControlMixin struct {
-	out outflow
-	in  inflow
+	outflow outflow
+	inflow  inflow
 
 	OnStreamWindowUpdate func(streamID, incr uint32)
 }
@@ -109,22 +109,22 @@ type flowControlMixin struct {
 func (flw *flowControlMixin) init(c *Controller) {
 	// outflow init
 	{
-		init := c.writeSettings.GetSetting(http2.SettingInitialWindowSize) // 65535
-		flw.out.init(int32(init))
+		init := c.GetPeerSetting(http2.SettingInitialWindowSize) // 65535
+		flw.outflow.init(int32(init))
 		c.onAfterHandshake = append(c.onAfterHandshake, func() {
-			value := c.writeSettings.GetSetting(http2.SettingInitialWindowSize)
+			value := c.GetPeerSetting(http2.SettingInitialWindowSize)
 			if value > inflowMaxWindow {
 				c.GoAway(0, http2.ErrCodeFlowControl)
 				return
 			}
 			if value != init {
 				// will decrement the tokens if got initial window size smaller than original default
-				flw.out.put(int32(value) - int32(init))
+				flw.outflow.put(int32(value) - int32(init))
 			}
 		})
 		// rfc7540 S 6.9.2.: A SETTINGS frame cannot alter the connection flow-control window.
 		// c.settingsMixin.writeSettings.On(http2.SettingInitialWindowSize, func(value uint32) {})
-		c.readSettings.GetSetting(http2.SettingInitialWindowSize)
+		c.selfSettings.GetSetting(http2.SettingInitialWindowSize)
 		c.on[http2.FrameWindowUpdate] = func(f http2.Frame) {
 			frame := f.(*http2.WindowUpdateFrame)
 			if frame.StreamID != 0 {
@@ -138,13 +138,13 @@ func (flw *flowControlMixin) init(c *Controller) {
 					c.GoAway(0, http2.ErrCodeFlowControl)
 					return
 				}
-				flw.out.put(int32(frame.Increment))
+				flw.outflow.put(int32(frame.Increment))
 			}
 		}
 	}
 	// inflow init
 	{
-		init := c.readSettings.GetSetting(http2.SettingInitialWindowSize)
-		flw.in.init(init)
+		init := c.selfSettings.GetSetting(http2.SettingInitialWindowSize)
+		flw.inflow.init(init)
 	}
 }

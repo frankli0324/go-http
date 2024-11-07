@@ -1,4 +1,4 @@
-package h2c
+package errors
 
 type wrapErr struct {
 	msg string

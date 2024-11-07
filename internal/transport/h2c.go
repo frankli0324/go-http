@@ -43,9 +43,7 @@ func (h *H2C) ReadResponse(ctx context.Context, r io.ReadCloser, req *http.Prepa
 		return err
 	}
 
-	reader := s.ReadData(ctx)
-	resp.Body = bodyCloser{reader, s.Close}
-
+	resp.Body = s.ResponseBodyStream(ctx)
 	return nil
 }
 
@@ -61,7 +59,8 @@ func (h *H2C) WriteRequest(ctx context.Context, w io.WriteCloser, req *http.Prep
 	defer stream.Close()
 	hasBody := stream != http.NoBody
 
-	if err := s.WriteHeaders(ctx, func(f func(k, v string)) {
+	done := s.Connection.AssignStreamID(s)
+	err = s.WriteHeaders(ctx, func(f func(k, v string)) {
 		f(":method", req.Method)
 		f(":authority", req.HeaderHost)
 		if req.Method != "CONNECT" {
@@ -76,17 +75,16 @@ func (h *H2C) WriteRequest(ctx context.Context, w io.WriteCloser, req *http.Prep
 		if hasBody && req.ContentLength != -1 {
 			f("content-length", strconv.FormatInt(req.ContentLength, 10))
 		}
-	}, !hasBody /* && request has no trailers */); err != nil {
-		// TODO: trailers support
+	}, !hasBody /* && request has no trailers */)
+	done() // can start write next request header
+	if err != nil {
 		return err
 	}
 	if hasBody {
-		if err := s.WriteRequestBody(ctx, stream, req.ContentLength, true); err != nil {
-			return err
-		}
+		err = s.WriteRequestBody(ctx, stream, req.ContentLength, true)
 	}
-
-	return nil
+	// TODO: trailers support
+	return err
 }
 
 func getRawConn(c interface{}) net.Conn {

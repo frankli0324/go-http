@@ -75,6 +75,9 @@ func (c *Client) CtxDo(ctx context.Context, req *http.Request) (*http.Response, 
 		return nil, err
 	} else {
 		resp := &http.Response{}
-		return resp, tr.ReadResponse(ctx, conn, pr, resp)
+		if err = tr.ReadResponse(ctx, conn, pr, resp); err != nil {
+			resp.Body.Close()
+		}
+		return resp, err
 	}
 }

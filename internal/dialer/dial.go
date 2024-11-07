@@ -77,7 +77,7 @@ func (d *CoreDialer) Dial(ctx context.Context, r *http.PreparedRequest) (io.Read
 				if c.ConnectionState().NegotiatedProtocol == "h2" {
 					// must be h2 connection if negotiated h2.
 					// if error during handshake, error it is.
-					f := h2c.NewConn(c)
+					f := h2c.NewConnection(c)
 					// [*h2c.Connection] is managed by connection pool this way
 					return f, f.Handshake()
 				}

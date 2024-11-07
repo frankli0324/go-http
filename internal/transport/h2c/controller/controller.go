@@ -20,9 +20,10 @@ func NewController(c net.Conn) *Controller {
 	conn.framerMixin.init(conn)
 	conn.pingMixin.init(conn)
 	conn.flowControlMixin.init(conn)
-	conn.on[http2.FrameGoAway] = func(frame http2.Frame) {
+	conn.on[http2.FrameGoAway] = func(f http2.Frame) {
+		frame := f.(*http2.GoAwayFrame)
+
 		conn.doneOnce.Do(func() {
-			frame := frame.(*http2.GoAwayFrame)
 			debug := frame.DebugData()
 			reason := &ReasonGoAway{
 				code:   frame.ErrCode,
@@ -32,6 +33,9 @@ func NewController(c net.Conn) *Controller {
 			copy(reason.debug, debug)
 			conn.doneReason = reason
 			close(conn.done)
+			if conn.onRemoteGoAway != nil {
+				conn.onRemoteGoAway(frame.LastStreamID, frame.ErrCode)
+			}
 		})
 	}
 	return conn
@@ -39,6 +43,9 @@ func NewController(c net.Conn) *Controller {
 
 // Controller holds the same purpose as [golang.org/x/net/http.ClientConn], yet it
 // couples with net/http.Transport deeply, so we are re-implementing it.
+//
+// Controller implements *connection level* flow control, ping/pong,
+// settings for both sides, and maintains connection state
 type Controller struct {
 	net.Conn
 
@@ -60,14 +67,19 @@ type Controller struct {
 	on [20]func(http2.Frame) // frame types
 
 	onAfterHandshake []func()
+	onRemoteGoAway   func(lastStreamID uint32, errCode http2.ErrCode)
 }
 
-// GoAway actively sends GOAWAY to remote peer
+// GoAway actively sends GOAWAY to remote peer.
+// It must not be called by [Controller] after handshake,
+// but should be called by [h2c.Connection] instead
 func (c *Controller) GoAway(lastStreamID uint32, code http2.ErrCode) (err error) {
 	return c.GoAwayDebug(lastStreamID, code, nil)
 }
 
-// GoAwayDebug actively sends GOAWAY to remote peer with debug info
+// GoAwayDebug actively sends GOAWAY to remote peer with debug info.
+// It must not be called by [Controller] after handshake,
+// but should be called by [h2c.Connection] instead
 func (c *Controller) GoAwayDebug(lastStreamID uint32, code http2.ErrCode, debug []byte) (err error) {
 	err = ErrMultipleGoAway
 	c.doneOnce.Do(func() {
@@ -99,13 +111,13 @@ func (c *Controller) Handshake() error {
 		return err
 	}
 
-	if err := c.AdvertiseReadSettings(c); err != nil {
+	if err := c.AdvertiseSelfSettings(c); err != nil {
 		return err
 	}
 	// The server connection preface consists of a potentially empty SETTINGS frame
 	// that MUST be the first frame the server sends in the HTTP/2 connection.
 	// https://httpwg.org/specs/rfc7540.html#rfc.section.3.5
-	f, err := c.framer.ReadFrame()
+	f, err := c.ReadFrame()
 	if err != nil {
 		c.doneOnce.Do(func() {
 			c.doneReason = err // TODO: wrap err
@@ -145,11 +157,10 @@ func (c *Controller) WaitAndClose() error {
 
 func (c *Controller) consumer() error {
 	for atomic.LoadUint32(&c.closing) == 0 {
-		f, err := c.framer.ReadFrame()
+		f, err := c.ReadFrame()
 		if err != nil {
 			return err
 		}
-		c.WriteWindowUpdate(f.Header().StreamID, f.Header().Length)
 		// keep things sending
 		// TODO: implement flow control
 
@@ -166,19 +177,17 @@ func (c *Controller) OnStreamReset(cb func(*http2.RSTStreamFrame)) {
 	}
 }
 
-func (c *Controller) OnData(cb func(*http2.DataFrame)) {
+func (c *Controller) OnData(cb func(*http2.DataFrame), onerr func(http2.ErrCode)) {
 	c.on[http2.FrameData] = func(f http2.Frame) {
 		frame := f.(*http2.DataFrame)
 		dl := uint32(len(frame.Data()))
-		if !c.flowControlMixin.in.stage(dl) {
-			c.GoAway(0, http2.ErrCodeFlowControl)
+		if !c.inflow.stage(dl) {
+			onerr(http2.ErrCodeFlowControl)
 		} else {
 			cb(frame)
 		}
-		if inc := c.in.grant(uint32(len(frame.Data()))); inc != 0 {
-			if err := c.WriteWindowUpdate(0, inc); err != nil {
-				c.GoAway(0, http2.ErrCodeFlowControl)
-			}
+		if inc := c.inflow.grant(uint32(len(frame.Data()))); inc != 0 {
+			c.WriteWindowUpdate(0, inc)
 		}
 	}
 }
@@ -196,11 +205,15 @@ func (c *Controller) OnHeader(cb func(*http2.MetaHeadersFrame)) {
 func (c *Controller) WriteData(streamID uint32, endStream bool, data []byte) error {
 	// wraps framer WriteData for connection level flow control
 	for len(data) != 0 {
-		bat := c.flowControlMixin.out.take(int32(len(data)))
+		bat := c.outflow.take(int32(len(data)))
 		if err := c.framerMixin.WriteData(streamID, endStream, data[:bat]); err != nil {
 			return err
 		}
 		data = data[bat:]
 	}
 	return nil
+}
+
+func (c *Controller) OnRemoteGoAway(cb func(lastStreamID uint32, errCode http2.ErrCode)) {
+	c.onRemoteGoAway = cb
 }
