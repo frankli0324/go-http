@@ -6,10 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/textproto"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/frankli0324/go-http/internal/http"
 	"github.com/frankli0324/go-http/internal/transport/chunked"
@@ -17,11 +17,11 @@ import (
 
 type HTTP1 struct{}
 
-func (t HTTP1) RoundTrip(ctx context.Context, w io.Writer, req *http.PreparedRequest, r io.ReadCloser, resp *http.Response) error {
-	if err := t.WriteRequest(ctx, w, req); err != nil {
+func (t HTTP1) RoundTrip(ctx context.Context, rw io.ReadWriteCloser, req *http.PreparedRequest, resp *http.Response) error {
+	if err := t.WriteRequest(ctx, rw, req); err != nil {
 		return err
 	}
-	return t.ReadResponse(ctx, r, req, resp)
+	return t.ReadResponse(ctx, rw, req, resp)
 }
 
 func (t HTTP1) WriteRequest(ctx context.Context, w io.Writer, r *http.PreparedRequest) error {
@@ -80,6 +80,8 @@ func (t HTTP1) expectContentLength(r *http.PreparedRequest) bool {
 	return false
 }
 
+var poolHeaderWriter = sync.Pool{New: func() interface{} { return &bufio.Writer{} }}
+
 // writeHeader writes the status and header part of an http 1.1 request
 // e.g.:
 //
@@ -88,7 +90,10 @@ func (t HTTP1) expectContentLength(r *http.PreparedRequest) bool {
 //	X-Xx-Yy: cccccc\r\n
 //	\r\n
 func (t HTTP1) writeHeader(w io.Writer, r *http.PreparedRequest) error {
-	header := bufio.NewWriter(w) // default bufsize is 4096
+	header := poolHeaderWriter.Get().(*bufio.Writer)
+	defer poolHeaderWriter.Put(header)
+	defer header.Reset(nil)
+	header.Reset(w) // default bufsize is 4096
 
 	if _, err := header.WriteString(r.Method); err != nil {
 		return err
@@ -130,8 +135,12 @@ func (t HTTP1) writeHeader(w io.Writer, r *http.PreparedRequest) error {
 	return nil
 }
 
+var poolResponseReader = sync.Pool{New: func() interface{} { return &bufio.Reader{} }}
+
 func (t HTTP1) ReadResponse(ctx context.Context, r io.ReadCloser, req *http.PreparedRequest, resp *http.Response) (err error) {
-	tp := textproto.NewReader(bufio.NewReader(r))
+	rr := poolResponseReader.Get().(*bufio.Reader)
+	rr.Reset(r)
+	tp := textproto.NewReader(rr)
 	if err := t.readHeader(tp, resp); err != nil {
 		return err
 	}
@@ -190,22 +199,27 @@ func (t HTTP1) readHeader(tp *textproto.Reader, resp *http.Response) error {
 }
 
 func (t HTTP1) readTransfer(br *bufio.Reader, r io.ReadCloser, req *http.PreparedRequest, resp *http.Response) error {
-	closer := func(body io.Reader) io.ReadCloser { return bodyCloser{body, r.Close} }
-	closeCloser := closer
-	if cr, ok := r.(interface{ Raw() net.Conn }); ok { // can get underlying connection
-		closeCloser = func(body io.Reader) io.ReadCloser {
-			return bodyCloser{body, func() error {
-				err := cr.Raw().Close()
-				errRel := r.Close() // always release connection
-				if err != nil {
-					return err
-				}
-				return errRel
-			}}
-		}
-		if req.Header.Get("Connection") == "close" || resp.Header.Get("Connection") == "close" {
-			closer = closeCloser
-		}
+	closer := func(body io.Reader) io.ReadCloser {
+		return bodyCloser{body, func() error {
+			br.Reset(nil)
+			poolResponseReader.Put(br)
+			if !tryRelease(r) {
+				return r.Close()
+			}
+			return nil
+		}}
+	}
+	closeCloser := func(body io.Reader) io.ReadCloser {
+		// used if request or response specifies "Connection: close"
+		return bodyCloser{body, func() error {
+			br.Reset(nil)
+			poolResponseReader.Put(br)
+			return r.Close()
+		}}
+	}
+
+	if req.Header.Get("Connection") == "close" || resp.Header.Get("Connection") == "close" {
+		closer = closeCloser
 	}
 
 	// the header key was canonicalized while reading from the stream
@@ -248,7 +262,7 @@ func (t HTTP1) readTransfer(br *bufio.Reader, r io.ReadCloser, req *http.Prepare
 	case resp.ContentLength == 0:
 		closer(nil).Close()
 		resp.Body = http.NoBody
-	case resp.ContentLength < 0: // no content-length header present, assume connection: close
+	case resp.ContentLength < 0:
 		resp.Body = closer(br)
 	}
 	return nil

@@ -20,3 +20,11 @@ func Cut(s, sep string) (before, after string, found bool) {
 	}
 	return s, "", false
 }
+
+func tryRelease(r interface{}) bool {
+	rr, ok := r.(interface{ Release() })
+	if ok {
+		rr.Release()
+	}
+	return ok
+}

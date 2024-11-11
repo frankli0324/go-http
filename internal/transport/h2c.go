@@ -14,11 +14,11 @@ import (
 
 type H2C struct{}
 
-func (t H2C) RoundTrip(ctx context.Context, w io.Writer, req *http.PreparedRequest, r io.ReadCloser, resp *http.Response) error {
-	if err := t.WriteRequest(ctx, w, req); err != nil {
+func (t H2C) RoundTrip(ctx context.Context, rw io.ReadWriteCloser, req *http.PreparedRequest, resp *http.Response) error {
+	if err := t.WriteRequest(ctx, rw, req); err != nil {
 		return err
 	}
-	return t.ReadResponse(ctx, r, req, resp)
+	return t.ReadResponse(ctx, rw, req, resp)
 }
 
 func (h H2C) ReadResponse(ctx context.Context, r io.ReadCloser, req *http.PreparedRequest, resp *http.Response) error {

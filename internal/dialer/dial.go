@@ -99,10 +99,7 @@ func (d *CoreDialer) Dial(ctx context.Context, r *http.PreparedRequest) (io.Read
 		}
 		return nil, err
 	}
-	return readWriteCloser{
-		ReadWriter: re,
-		close:      func() error { re.Release(); return nil },
-	}, nil
+	return re, nil
 }
 
 type isRetry struct{}
@@ -112,13 +109,4 @@ type wStream h2c.Stream
 
 func (s *wStream) Raw() net.Conn {
 	return (*h2c.Stream)(s)
-}
-
-type readWriteCloser struct {
-	io.ReadWriter
-	close func() error
-}
-
-func (r readWriteCloser) Close() error {
-	return r.close()
 }

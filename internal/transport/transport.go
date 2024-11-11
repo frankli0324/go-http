@@ -16,5 +16,5 @@ import (
 //
 // Transports SHOULD NOT hold states.
 type Transport interface {
-	RoundTrip(ctx context.Context, w io.Writer, req *http.PreparedRequest, r io.ReadCloser, resp *http.Response) error
+	RoundTrip(ctx context.Context, rw io.ReadWriteCloser, req *http.PreparedRequest, resp *http.Response) error
 }
