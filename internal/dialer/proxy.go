@@ -36,23 +36,6 @@ var (
 	h1Transport = transport.HTTP1{}
 )
 
-func (d *CoreDialer) tryDialProxy(ctx context.Context, r *http.PreparedRequest) (net.Conn, error) {
-	if d.GetProxy != nil {
-		proxy, perr := d.GetProxy(ctx, r.Request)
-		if perr != nil {
-			return nil, perr
-		}
-		if proxy != "" {
-			proxyU, perr := url.Parse(proxy)
-			if perr != nil {
-				return nil, perr
-			}
-			return d.DialContextOverProxy(ctx, r.U, proxyU)
-		}
-	}
-	return nil, nil
-}
-
 // DialContextOverProxy creates a connection over http/socks proxy.
 // This part of logic may be reused when wrapping *[CoreDialer] into
 // a new custom [Dialer]

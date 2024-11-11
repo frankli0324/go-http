@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"io"
 	"net"
+	"net/url"
 
 	"github.com/frankli0324/go-http/internal/http"
 	"github.com/frankli0324/go-http/internal/transport/h2c"
@@ -50,14 +51,25 @@ func (d *CoreDialer) Dial(ctx context.Context, r *http.PreparedRequest) (io.Read
 	if add, prt, err := net.SplitHostPort(addr); err == nil {
 		addr, port = add, prt
 	}
-	hp := net.JoinHostPort(addr, port)
+
+	var proxy string
+	if d.GetProxy != nil {
+		var err error
+		proxy, err = d.GetProxy(ctx, r.Request)
+		if err != nil {
+			return nil, err
+		}
+	}
 	re, err := pool.Connect(ctx, netpool.ConnRequest{
-		Key: hp, Dial: func(ctx context.Context) (conn net.Conn, err error) {
-			conn, err = d.tryDialProxy(ctx, r)
-			if err != nil {
-				return nil, err
-			}
-			if conn == nil {
+		Key: dialKey{addr, port, proxy},
+		Dial: func(ctx context.Context) (conn net.Conn, err error) {
+			if proxy != "" {
+				purl, perr := url.Parse(proxy)
+				if perr != nil {
+					return nil, perr
+				}
+				conn, err = d.DialContextOverProxy(ctx, r.U, purl)
+			} else {
 				conn, err = d.dialRaw(ctx, addr, port)
 			}
 			if err != nil {
@@ -109,4 +121,8 @@ type wStream h2c.Stream
 
 func (s *wStream) Raw() net.Conn {
 	return (*h2c.Stream)(s)
+}
+
+type dialKey struct {
+	host, port, proxy string
 }
