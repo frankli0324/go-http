@@ -15,18 +15,17 @@ import (
 type H2C struct{}
 
 func (t H2C) RoundTrip(ctx context.Context, rw io.ReadWriteCloser, req *http.PreparedRequest, resp *http.Response) error {
-	if err := t.WriteRequest(ctx, rw, req); err != nil {
+	s, ok := getRawConn(rw).(*h2c.Stream)
+	if !ok {
+		return errors.New("can only round trip to h2 stream")
+	}
+	if err := t.WriteRequest(ctx, s, req); err != nil {
 		return err
 	}
-	return t.ReadResponse(ctx, rw, req, resp)
+	return t.ReadResponse(ctx, s, req, resp)
 }
 
-func (h H2C) ReadResponse(ctx context.Context, r io.ReadCloser, req *http.PreparedRequest, resp *http.Response) error {
-	s, ok := getRawConn(r).(*h2c.Stream)
-	if !ok {
-		return errors.New("can only read response from h2 stream")
-	}
-
+func (h H2C) ReadResponse(ctx context.Context, s *h2c.Stream, req *http.PreparedRequest, resp *http.Response) error {
 	resp.Header = make(http.Header)
 	err := s.ReadHeaders(ctx, func(k, v string) error {
 		if len(k) > 0 && k[0] == ':' {
@@ -50,18 +49,11 @@ func (h H2C) ReadResponse(ctx context.Context, r io.ReadCloser, req *http.Prepar
 		return err
 	}
 
-	resp.Body = bodyCloser{
-		s.ResponseBodyStream(ctx),
-		func() error { return r.Close() },
-	}
+	resp.Body = s.ResponseBodyStream(ctx)
 	return nil
 }
 
-func (h H2C) WriteRequest(ctx context.Context, w io.Writer, req *http.PreparedRequest) error {
-	s, ok := getRawConn(w).(*h2c.Stream)
-	if !ok {
-		return errors.New("can only write request to h2 stream")
-	}
+func (h H2C) WriteRequest(ctx context.Context, s *h2c.Stream, req *http.PreparedRequest) error {
 	stream, err := req.GetBody()
 	if err != nil {
 		return err

@@ -25,8 +25,7 @@ type Stream struct {
 	doneReason error
 	doneOnce   sync.Once
 
-	done   chan interface{} // either us or them reset the stream
-	doneCB func()
+	done chan interface{} // either us or them reset the stream
 }
 
 func (s *Stream) Valid() bool {
@@ -61,7 +60,10 @@ func (s *Stream) CloseWithError(err error) error {
 	s.doneOnce.Do(func() {
 		s.doneReason = err
 		close(s.done)
-		s.doneCB()
+		s.Connection.ReleaseStreamID(s)
+		if err != nil {
+			s.respWriter.CloseWithError(err)
+		}
 	})
 	return nil
 }
@@ -70,32 +72,34 @@ func (s *Stream) Reset(code http2.ErrCode, isReceived bool) (err error) {
 	s.rstOnce.Do(func() {
 		if !isReceived {
 			err = s.controller.WriteRSTStream(s.streamID, code)
+			s.CloseWithError(errs.ErrStreamResetLocal(s.streamID, code))
+		} else {
+			s.CloseWithError(errs.ErrStreamResetRemote(s.streamID, code))
 		}
-		s.CloseWithError(errs.ErrStreamResetRemote)
 	})
 	return err
 }
 
-var errReturnEarly = errors.New("internal: early return due to context cancelled")
-var errReqBodyTooLong = errors.New("internal: request body larger than specified content length")
-
-func (s *Stream) writeCtx(ctx context.Context, writeAction func(context.Context) error) error {
-	errCh := make(chan error)
-	go func() {
-		errCh <- writeAction(ctx)
-		close(errCh)
-	}()
+// actions that can potentially hang forever should be wrapped in timeout
+func (s *Stream) writeCtx(ctx context.Context, writeAction func(context.Context) error) (err error) {
+	done := make(chan struct{})
+	go func() { err = writeAction(ctx); close(done) }()
 	select {
+	case <-done:
 	case <-ctx.Done():
-		return errs.ErrStreamCancelled.Wrap(s.Reset(http2.ErrCodeCancel, false))
-	case err := <-errCh:
-		if err == errReturnEarly {
-			return errs.ErrStreamCancelled.Wrap(s.Reset(http2.ErrCodeCancel, false))
-		} else if err == errReqBodyTooLong {
-			return errs.ErrStreamCancelled.Wrap(err)
-		}
-		return err
+		err = errs.ErrStreamCancelled(s.streamID)
 	}
+	if err == nil {
+		return nil
+	}
+	if err == errs.ErrStreamCancelled(s.streamID) {
+		s.Reset(http2.ErrCodeCancel, false)
+	} else if errors.Is(err, errs.ErrFramerWrite(s.streamID)) {
+		s.Reset(http2.ErrCodeProtocol, false)
+	} else if err != nil {
+		s.Reset(http2.ErrCodeInternal, false)
+	}
+	return err
 }
 
 // TODO: maybe change this api
@@ -113,7 +117,7 @@ func (s *Stream) WriteHeaders(ctx context.Context, enumHeaders func(func(k, v st
 		for len(data) > 0 {
 			select {
 			case <-ctx.Done():
-				return errReturnEarly
+				return errs.ErrStreamCancelled(s.streamID)
 			default:
 			}
 			var chunk []byte
@@ -133,11 +137,11 @@ func (s *Stream) WriteHeaders(ctx context.Context, enumHeaders func(func(k, v st
 					EndHeaders:    endHeaders,
 				})
 				if err != nil {
-					return err
+					return errs.ErrFramerWrite(s.streamID).Wrap(err)
 				}
 				first = false
 			} else if err := s.controller.WriteContinuation(s.streamID, endHeaders, chunk); err != nil {
-				return err
+				return errs.ErrFramerWrite(s.streamID).Wrap(err)
 			}
 		}
 		return nil
@@ -148,7 +152,7 @@ func (s *Stream) WriteHeaders(ctx context.Context, enumHeaders func(func(k, v st
 func (s *Stream) ReadHeaders(ctx context.Context, headersCb func(k, v string) error) error {
 	select {
 	case <-ctx.Done():
-		return errs.ErrStreamCancelled.Wrap(s.Reset(http2.ErrCodeCancel, false))
+		return errs.ErrStreamCancelled(s.streamID).Wrap(s.Reset(http2.ErrCodeCancel, false))
 	case <-s.done:
 		return s.doneReason
 	case headers := <-s.chanHeaders:
@@ -199,7 +203,7 @@ func (s *Stream) WriteRequestBody(ctx context.Context, data io.Reader, sz int64,
 		for {
 			select {
 			case <-ctx.Done():
-				return errReturnEarly
+				return errs.ErrStreamCancelled(s.streamID)
 			default:
 			}
 			l, err := data.Read(chunk)
@@ -208,21 +212,18 @@ func (s *Stream) WriteRequestBody(ctx context.Context, data io.Reader, sz int64,
 				read += int64(l)
 				err := s.controller.WriteData(s.streamID, endStream, chunk[:l])
 				if err != nil {
-					s.Reset(http2.ErrCodeProtocol, false)
-					return err
+					return errs.ErrFramerWrite(s.streamID).Wrap(err)
 				}
 			}
 			if sz != -1 && read > sz {
-				s.Reset(http2.ErrCodeInternal, false)
-				return errReqBodyTooLong
+				return errs.ErrReqBodyTooLong(s.streamID)
 			}
 			if err != nil {
 				if err == io.EOF && sz != -1 && read < sz {
 					err = io.ErrUnexpectedEOF
 				}
 				if err != io.EOF {
-					s.Reset(http2.ErrCodeInternal, false)
-					return err
+					return errs.ErrReqBodyRead(s.streamID).Wrap(err)
 				}
 				return nil // EOF
 			}

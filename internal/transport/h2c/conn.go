@@ -86,9 +86,8 @@ func (c *Connection) withStream(streamID uint32, f func(*Stream) error) {
 
 	if !active.Valid() {
 		c.controller.WriteRSTStream(streamID, http2.ErrCodeStreamClosed)
-		// if err goaway
 	} else if err := f(active); err != nil {
-		c.controller.WriteRSTStream(streamID, http2.ErrCodeProtocol)
+		active.Reset(http2.ErrCodeInternal, false)
 	}
 }
 
@@ -114,6 +113,13 @@ func (c *Connection) Stream() (*Stream, error) {
 	return s, nil
 }
 
+func (c *Connection) ReleaseStreamID(s *Stream) {
+	c.muActive.Lock()
+	delete(c.activeStreams, s.streamID)
+	c.muActive.Unlock()
+	c.condActive.Signal()
+}
+
 func (c *Connection) AssignStreamID(s *Stream) func() {
 	c.muActive.Lock()
 	for len(c.activeStreams) >= int(c.controller.GetPeerSetting(http2.SettingMaxConcurrentStreams)) {
@@ -121,12 +127,6 @@ func (c *Connection) AssignStreamID(s *Stream) func() {
 	}
 	c.muNewStream.Lock()
 	s.streamID = uint32(atomic.AddInt32(&c.lastStreamID, 2))
-	s.doneCB = func() {
-		c.muActive.Lock()
-		delete(c.activeStreams, s.streamID)
-		c.muActive.Unlock()
-		c.condActive.Signal()
-	}
 	// TODO: check streamid inside 2^31 and match connection setting
 	c.activeStreams[s.streamID] = s
 	c.muActive.Unlock()

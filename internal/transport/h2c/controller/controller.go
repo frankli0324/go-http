@@ -206,10 +206,10 @@ func (c *Controller) WriteData(streamID uint32, endStream bool, data []byte) err
 	// wraps framer WriteData for connection level flow control
 	for len(data) != 0 {
 		bat := c.outflow.take(int32(len(data)))
-		if err := c.framerMixin.WriteData(streamID, endStream, data[:bat]); err != nil {
-			return err
-		}
 		data = data[bat:]
+	}
+	if err := c.framerMixin.WriteData(streamID, endStream, data); err != nil {
+		return err
 	}
 	return nil
 }
