@@ -109,10 +109,10 @@ type flowControlMixin struct {
 func (flw *flowControlMixin) init(c *Controller) {
 	// outflow init
 	{
-		init := c.GetPeerSetting(http2.SettingInitialWindowSize) // 65535
+		init := c.peerSettings.v[http2.SettingInitialWindowSize] // 65535
 		flw.outflow.init(int32(init))
 		c.onAfterHandshake = append(c.onAfterHandshake, func() {
-			value := c.GetPeerSetting(http2.SettingInitialWindowSize)
+			value, done := c.UsePeerSetting(http2.SettingInitialWindowSize)
 			if value > inflowMaxWindow {
 				c.GoAway(0, http2.ErrCodeFlowControl)
 				return
@@ -121,10 +121,11 @@ func (flw *flowControlMixin) init(c *Controller) {
 				// will decrement the tokens if got initial window size smaller than original default
 				flw.outflow.put(int32(value) - int32(init))
 			}
+			done()
 		})
 		// rfc7540 S 6.9.2.: A SETTINGS frame cannot alter the connection flow-control window.
 		// c.settingsMixin.writeSettings.On(http2.SettingInitialWindowSize, func(value uint32) {})
-		c.selfSettings.GetSetting(http2.SettingInitialWindowSize)
+		c.selfSettings.UseSetting(http2.SettingInitialWindowSize)
 		c.on[http2.FrameWindowUpdate] = func(f http2.Frame) {
 			frame := f.(*http2.WindowUpdateFrame)
 			if frame.StreamID != 0 {
@@ -133,18 +134,14 @@ func (flw *flowControlMixin) init(c *Controller) {
 				} else {
 					panic("no stream window update dispatcher registered")
 				}
-			} else {
-				if frame.Increment > inflowMaxWindow {
-					c.GoAway(0, http2.ErrCodeFlowControl)
-					return
-				}
-				flw.outflow.put(int32(frame.Increment))
+			} else if !flw.outflow.put(int32(frame.Increment)) {
+				c.GoAway(0 /*TODO: how to get last stream id*/, http2.ErrCodeFlowControl)
 			}
 		}
 	}
 	// inflow init
 	{
-		init := c.selfSettings.GetSetting(http2.SettingInitialWindowSize)
+		init := c.selfSettings.v[http2.SettingInitialWindowSize]
 		flw.inflow.init(init)
 	}
 }

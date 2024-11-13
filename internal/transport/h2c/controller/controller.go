@@ -202,16 +202,16 @@ func (c *Controller) OnHeader(cb func(*http2.MetaHeadersFrame)) {
 	}
 }
 
-func (c *Controller) WriteData(streamID uint32, endStream bool, data []byte) error {
+func (c *Controller) WriteData(streamID uint32, endStream bool, data []byte) (int, error) {
 	// wraps framer WriteData for connection level flow control
-	for len(data) != 0 {
+	if len(data) != 0 {
 		bat := c.outflow.take(int32(len(data)))
-		data = data[bat:]
+		data = data[:bat]
 	}
 	if err := c.framerMixin.WriteData(streamID, endStream, data); err != nil {
-		return err
+		return 0, err
 	}
-	return nil
+	return len(data), nil
 }
 
 func (c *Controller) OnRemoteGoAway(cb func(lastStreamID uint32, errCode http2.ErrCode)) {

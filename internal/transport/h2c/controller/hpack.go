@@ -10,34 +10,26 @@ import (
 )
 
 type hpackMixin struct {
-	hpEnc *hpack.Encoder
+	ps     *settings
+	hpEnc  *hpack.Encoder
+	lastSz uint32
 
 	wBuf *bytes.Buffer
 
-	muWbuf                 sync.Mutex
-	maxWriteHeaderListSize uint32
+	mu sync.Mutex
 }
 
 func (h *hpackMixin) init(c *Controller) {
 	h.wBuf = &bytes.Buffer{}
 	h.hpEnc = hpack.NewEncoder(h.wBuf)
-	h.maxWriteHeaderListSize = c.GetPeerSetting(http2.SettingMaxHeaderListSize)
-
-	c.peerSettings.On(http2.SettingHeaderTableSize, func(value uint32) {
-		h.muWbuf.Lock()
-		h.hpEnc.SetMaxDynamicTableSize(value)
-		h.muWbuf.Unlock()
-	})
-	c.peerSettings.On(http2.SettingMaxHeaderListSize, func(value uint32) {
-		h.muWbuf.Lock()
-		h.maxWriteHeaderListSize = value // this value is protected by lock, settings is not
-		h.muWbuf.Unlock()
-	})
+	h.lastSz = h.hpEnc.MaxDynamicTableSize()
+	h.ps = c.peerSettings
 }
 
 // EncodeHeaders encodes HEADERS frame BlockFragment
-func (h *hpackMixin) EncodeHeaders(enumHeaders func(func(k, v string))) ([]byte, func(), error) {
-	h.muWbuf.Lock()
+func (h *hpackMixin) EncodeHeaders(enumHeaders func(func(k, v string)), do func(data []byte) error) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	h.wBuf.Reset()
 
 	total := uint32(0)
@@ -46,11 +38,20 @@ func (h *hpackMixin) EncodeHeaders(enumHeaders func(func(k, v string))) ([]byte,
 		total += f.Size()
 		// if total > settings.max header size { error }
 	})
-	if total > h.maxWriteHeaderListSize {
-		return nil, nil, errors.New("http2: request header list larger than peer's advertised limit")
+	maxWriteHeaderListSize, done1 := h.ps.UseSetting(http2.SettingMaxHeaderListSize)
+	defer done1()
+	if total > maxWriteHeaderListSize {
+		return errors.New("http2: request header list larger than peer's advertised limit")
+	}
+
+	headerTabSize, done2 := h.ps.UseSetting(http2.SettingHeaderTableSize)
+	defer done2()
+	if h.lastSz != headerTabSize {
+		h.hpEnc.SetMaxDynamicTableSize(headerTabSize)
+		h.lastSz = headerTabSize
 	}
 	enumHeaders(func(name, value string) {
 		h.hpEnc.WriteField(hpack.HeaderField{Name: name, Value: value})
 	})
-	return h.wBuf.Bytes(), h.muWbuf.Unlock, nil
+	return do(h.wBuf.Bytes())
 }

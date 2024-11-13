@@ -14,9 +14,9 @@ type framerMixin struct {
 
 func (f *framerMixin) init(c *Controller) {
 	framer := http2.NewFramer(c.Conn, c.Conn) // framer already has a layer of buffer
-	// framer.SetMaxReadFrameSize(GetMaxFrameSize(c.remoteSettings.MaxReadFrameSize))
-	framer.ReadMetaHeaders = hpack.NewDecoder(c.readSettings.GetSetting(http2.SettingHeaderTableSize), nil)
-	framer.MaxHeaderListSize = c.readSettings.GetSetting(http2.SettingMaxHeaderListSize)
+	framer.SetMaxReadFrameSize(c.selfSettings.v[http2.SettingMaxFrameSize])
+	framer.ReadMetaHeaders = hpack.NewDecoder(c.selfSettings.v[http2.SettingHeaderTableSize], nil)
+	framer.MaxHeaderListSize = c.selfSettings.v[http2.SettingMaxHeaderListSize]
 	f.framer = framer
 }
 
@@ -81,4 +81,8 @@ func (f *framerMixin) WriteWindowUpdate(streamID, incr uint32) error {
 	err := f.framer.WriteWindowUpdate(streamID, incr)
 	f.muWrite.Unlock()
 	return err
+}
+
+func (f *framerMixin) ReadFrame() (http2.Frame, error) {
+	return f.framer.ReadFrame()
 }

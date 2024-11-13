@@ -59,6 +59,12 @@ func NewConnection(c net.Conn) *Connection {
 		}
 		conn.muActive.Unlock()
 	})
+	ctrl.OnStreamWindowUpdate = func(streamID, incr uint32) {
+		conn.withStream(streamID, func(s *Stream) error {
+			// TODO
+			return nil
+		})
+	}
 	return conn
 }
 
@@ -122,14 +128,18 @@ func (c *Connection) ReleaseStreamID(s *Stream) {
 
 func (c *Connection) AssignStreamID(s *Stream) func() {
 	c.muActive.Lock()
-	for len(c.activeStreams) >= int(c.controller.GetPeerSetting(http2.SettingMaxConcurrentStreams)) {
+	maxConcStreams, done := c.controller.UsePeerSetting(http2.SettingMaxConcurrentStreams)
+	for len(c.activeStreams) >= int(maxConcStreams) {
+		done()
 		c.condActive.Wait()
+		maxConcStreams, done = c.controller.UsePeerSetting(http2.SettingMaxConcurrentStreams)
 	}
 	c.muNewStream.Lock()
 	s.streamID = uint32(atomic.AddInt32(&c.lastStreamID, 2))
 	// TODO: check streamid inside 2^31 and match connection setting
 	c.activeStreams[s.streamID] = s
 	c.muActive.Unlock()
+	done()
 	return c.muNewStream.Unlock
 }
 

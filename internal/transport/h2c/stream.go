@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
-	"log"
+	"math"
 	"sync"
 
 	errs "github.com/frankli0324/go-http/internal/transport/h2c/errors"
@@ -80,8 +80,8 @@ func (s *Stream) Reset(code http2.ErrCode, isReceived bool) (err error) {
 	return err
 }
 
-// actions that can potentially hang forever should be wrapped in timeout
-func (s *Stream) writeCtx(ctx context.Context, writeAction func(context.Context) error) (err error) {
+// HandleWrite handles errors and timeouts from [WriteHeaders] and [WriteRequestBody]
+func (s *Stream) HandleWrite(ctx context.Context, writeAction func(context.Context) error) (err error) {
 	done := make(chan struct{})
 	go func() { err = writeAction(ctx); close(done) }()
 	select {
@@ -104,13 +104,7 @@ func (s *Stream) writeCtx(ctx context.Context, writeAction func(context.Context)
 
 // TODO: maybe change this api
 func (s *Stream) WriteHeaders(ctx context.Context, enumHeaders func(func(k, v string)), last bool) error {
-	data, unlock, err := s.controller.EncodeHeaders(enumHeaders)
-	defer unlock()
-	if err != nil {
-		return err
-	}
-
-	return s.writeCtx(ctx, func(ctx context.Context) error {
+	return s.controller.EncodeHeaders(enumHeaders, func(data []byte) error {
 		// below code consults x/net/http2 func (cc *ClientConn) writeHeaders()
 
 		first := true // first frame written (HEADERS is first, then CONTINUATION)
@@ -122,25 +116,27 @@ func (s *Stream) WriteHeaders(ctx context.Context, enumHeaders func(func(k, v st
 			}
 			var chunk []byte
 
-			maxWriteFrameSz := int(s.controller.GetPeerSetting(http2.SettingMaxFrameSize))
-			endHeaders := len(data) <= maxWriteFrameSz
+			maxWriteFrameSz, done := s.controller.UsePeerSetting(http2.SettingMaxFrameSize)
+			endHeaders := len(data) <= int(maxWriteFrameSz)
 			if !endHeaders {
 				chunk, data = data[:maxWriteFrameSz], data[maxWriteFrameSz:]
 			} else {
 				chunk, data = data, nil
 			}
+			var err error
 			if first {
-				err := s.controller.WriteHeaders(http2.HeadersFrameParam{
+				err = s.controller.WriteHeaders(http2.HeadersFrameParam{
 					StreamID:      s.streamID,
 					BlockFragment: chunk,
 					EndStream:     last,
 					EndHeaders:    endHeaders,
 				})
-				if err != nil {
-					return errs.ErrFramerWrite(s.streamID).Wrap(err)
-				}
 				first = false
-			} else if err := s.controller.WriteContinuation(s.streamID, endHeaders, chunk); err != nil {
+			} else {
+				err = s.controller.WriteContinuation(s.streamID, endHeaders, chunk)
+			}
+			done()
+			if err != nil {
 				return errs.ErrFramerWrite(s.streamID).Wrap(err)
 			}
 		}
@@ -158,10 +154,7 @@ func (s *Stream) ReadHeaders(ctx context.Context, headersCb func(k, v string) er
 	case headers := <-s.chanHeaders:
 		for _, kv := range headers.Fields {
 			if err := headersCb(kv.Name, kv.Value); err != nil {
-				if err := s.Reset(http2.ErrCodeProtocol, false); err != nil {
-					log.Printf("reset stream %d error:%v", s.streamID, err)
-					// TODO: connection error
-				}
+				s.Reset(http2.ErrCodeInternal, false)
 				return err
 			}
 		}
@@ -169,66 +162,67 @@ func (s *Stream) ReadHeaders(ctx context.Context, headersCb func(k, v string) er
 	return nil
 }
 
-var bufPoolShort = sync.Pool{New: func() interface{} {
-	r := make([]byte, 1024)
-	return &r
-}}
-var bufPoolLong = sync.Pool{New: func() interface{} {
-	r := make([]byte, 16384*2)
-	return &r
-}}
-
-func getBodyWriteBuf(sz int) (b []byte, put func(interface{})) {
-	p := &bufPoolShort
-	if sz >= 16384 {
-		p = &bufPoolLong
-	}
-	b = *(p.Get().(*[]byte))
-	if sz > len(b) {
-		b = append(b, make([]byte, sz-len(b))...)
-	}
-	return b, p.Put
-}
+var bodyWriteBuf = (&bufPool{}).init(
+	[]int{
+		1024,
+		1024 * 16, // default max frame size
+		1024 * 512},
+	[]int{
+		1024 * 8,
+		1024 * 24,
+		math.MaxInt},
+)
 
 func (s *Stream) WriteRequestBody(ctx context.Context, data io.Reader, sz int64, last bool) error {
-	return s.writeCtx(ctx, func(ctx context.Context) error {
-		read := int64(0)
-		maxWriteFrameSz := int(s.controller.GetPeerSetting(http2.SettingMaxFrameSize))
-		bufSz := maxWriteFrameSz
-		if sz != -1 {
-			bufSz = min(bufSz, int(sz))
+	read := int64(0)
+	maxWriteFrameSz, done := s.controller.UsePeerSetting(http2.SettingMaxFrameSize)
+	defer done()
+	bufSz := int(maxWriteFrameSz)
+	if sz != -1 {
+		bufSz = min(int(bufSz), int(sz))
+	}
+	buffer, bufIdx := bodyWriteBuf.get(bufSz)
+	defer bodyWriteBuf.put(bufIdx, buffer)
+	chunk := (*buffer)[:bufSz]
+	current := 0
+	readThreshold := min(bufSz-1024, 512)
+	sawEOF := false
+	for {
+		select {
+		case <-ctx.Done():
+			return errs.ErrStreamCancelled(s.streamID)
+		default:
 		}
-		chunk, put := getBodyWriteBuf(bufSz)
-		defer put(&chunk)
-		for {
-			select {
-			case <-ctx.Done():
-				return errs.ErrStreamCancelled(s.streamID)
-			default:
-			}
-			l, err := data.Read(chunk)
-			endStream := last && err == io.EOF
-			if l != 0 || endStream {
-				read += int64(l)
-				err := s.controller.WriteData(s.streamID, endStream, chunk[:l])
-				if err != nil {
-					return errs.ErrFramerWrite(s.streamID).Wrap(err)
-				}
-			}
-			if sz != -1 && read > sz {
-				return errs.ErrReqBodyTooLong(s.streamID)
-			}
+		var err error
+		if !sawEOF && current < readThreshold {
+			var l int
+			l, err = data.Read(chunk[current:])
+			sawEOF = err == io.EOF
+			current += l
+			read += int64(l)
+		}
+		endStream := last && sawEOF
+		if current > 0 || endStream {
+			w, err := s.controller.WriteData(s.streamID, endStream, chunk[:current])
 			if err != nil {
-				if err == io.EOF && sz != -1 && read < sz {
-					err = io.ErrUnexpectedEOF
-				}
-				if err != io.EOF {
-					return errs.ErrReqBodyRead(s.streamID).Wrap(err)
-				}
-				return nil // EOF
+				return errs.ErrFramerWrite(s.streamID).Wrap(err)
 			}
+			copy(chunk[:current-w], chunk[w:current])
+			current -= w
 		}
-	})
+		if sz != -1 && read > sz {
+			return errs.ErrReqBodyTooLong(s.streamID)
+		}
+		if err != nil {
+			if err == io.EOF && sz != -1 && read < sz {
+				err = io.ErrUnexpectedEOF
+			}
+			if err != io.EOF {
+				return errs.ErrReqBodyRead(s.streamID).Wrap(err)
+			}
+			return nil // EOF
+		}
+	}
 }
 
 // TODO: maybe change this api
