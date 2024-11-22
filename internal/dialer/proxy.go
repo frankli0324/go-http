@@ -89,6 +89,14 @@ func (d *CoreDialer) DialContextOverProxy(ctx context.Context, remote, proxy *ur
 		}
 	}
 
+	// TODO: implement CONNECT over http2
+	// however in most cases, it seems that using a stream instead of an entire
+	// tcp connection for proxied connections is less efficient. h2 over h2 proxy
+	// maintains unnecessary state between user agent and proxy, while h1 over h2
+	// proxy is less common (which is the only sane scenario).
+	//
+	// also it's only when we also maintain agent->proxy connections in connection
+	// pools that dialing over h2 proxies is meaningful.
 	connReq := &http.PreparedRequest{
 		Request:    &http.Request{Method: "CONNECT"},
 		HeaderHost: remote.Host,
