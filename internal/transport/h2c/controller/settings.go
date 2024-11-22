@@ -1,38 +1,48 @@
 package controller
 
 import (
-	"errors"
 	"sync"
 
 	"golang.org/x/net/http2"
 )
 
-func newSettingsMixin(c *Controller) settingsMixin {
-	return settingsMixin{newPeerSettings(c), newSelfSettings(c)}
+func newSettingsMixin() settingsMixin {
+	return settingsMixin{
+		peerSettings: newPeerSettings(),
+		selfSettings: newSelfSettings(),
+	}
 }
 
 type settingsMixin struct {
-	peerSettings, selfSettings *settings
+	muPeer, muSelf             sync.RWMutex
+	peerSettings, selfSettings settings
 }
 
-func (s settingsMixin) UsePeerSetting(id http2.SettingID) (uint32, func()) {
-	return s.peerSettings.UseSetting(id)
+func (s *settingsMixin) UsePeerSetting(id http2.SettingID) (uint32, func()) {
+	s.muPeer.RLock()
+	return s.peerSettings.v[id], s.muPeer.RUnlock
 }
 
-func (s settingsMixin) ConfigureReadSetting(id http2.SettingID, val uint32) error {
+func (s *settingsMixin) UseSelfSetting(id http2.SettingID) (uint32, func()) {
+	s.muSelf.RLock()
+	return s.selfSettings.v[id], s.muSelf.RUnlock
+}
+
+func (s *settingsMixin) UpdatePeerSettings(sf *http2.SettingsFrame) (func(), error) {
+	s.muPeer.Lock()
+	return s.muPeer.Unlock, s.peerSettings.UpdateFrom(sf)
+}
+
+func (s *settingsMixin) ConfigureReadSetting(id http2.SettingID, val uint32) error {
 	// shall be called before handshake
-	// TODO: if called after handshake, send SETTINGS frame to update
 	if err := (http2.Setting{ID: id, Val: val}).Valid(); err != nil {
 		return err
 	}
 	s.selfSettings.v[id] = val
-	for _, v := range s.selfSettings.on[id] {
-		v(val)
-	}
 	return nil
 }
 
-func (s settingsMixin) AdvertiseSelfSettings(c *Controller) error {
+func (s *settingsMixin) advertiseSettings(c *Controller) error {
 	settings := make([]http2.Setting, 0, 8)
 	for id := 1; id <= 6; id++ {
 		setting := http2.Setting{
@@ -46,7 +56,7 @@ func (s settingsMixin) AdvertiseSelfSettings(c *Controller) error {
 	return c.WriteSettings(settings...)
 }
 
-func newSelfSettings(_ *Controller) *settings {
+func newSelfSettings() settings {
 	s := [8]uint32{}
 	s[http2.SettingHeaderTableSize] = 4096
 	s[http2.SettingEnablePush] = 0
@@ -60,11 +70,11 @@ func newSelfSettings(_ *Controller) *settings {
 	// supports read frame size up to 1<<24 - 1
 	s[http2.SettingMaxFrameSize] = 16 << 20
 
-	return &settings{v: s}
+	return settings{v: s}
 }
 
 // newPeerSettings creates a settings instance with default values
-func newPeerSettings(c *Controller) *settings {
+func newPeerSettings() settings {
 	s := [8]uint32{}
 	s[http2.SettingHeaderTableSize] = 4096
 	s[http2.SettingEnablePush] = 1
@@ -72,34 +82,13 @@ func newPeerSettings(c *Controller) *settings {
 	s[http2.SettingInitialWindowSize] = 65535
 	s[http2.SettingMaxFrameSize] = 16384
 	s[http2.SettingMaxHeaderListSize] = 0xffffffff
-	settings := &settings{v: s}
-
-	c.on[http2.FrameSettings] = func(f http2.Frame) {
-		sf := f.(*http2.SettingsFrame)
-		if sf.IsAck() {
-			return
-		}
-		settings.mu.Lock()
-		if err := settings.UpdateFrom(sf); err != nil {
-			var cerr http2.ConnectionError
-			if errors.As(err, &cerr) {
-				c.GoAwayDebug(0, http2.ErrCode(cerr), []byte("invalid settings"))
-			} else {
-				c.GoAwayDebug(0, http2.ErrCodeProtocol, []byte("invalid settings"))
-			}
-		} else {
-			_ = c.WriteSettingsAck()
-			settings.mu.Unlock() // all setting change effects must take place AFTER it's acked
-		}
-	}
+	settings := settings{v: s}
 	return settings
 }
 
 // settings is a set of http2 settings
 type settings struct {
-	v  [8]uint32               // http2.SettingID -> Val
-	on [8][]func(value uint32) // 8 -> max settings id
-	mu sync.RWMutex
+	v [8]uint32 // http2.SettingID -> Val
 }
 
 func (s *settings) UpdateFrom(frame *http2.SettingsFrame) error {
@@ -120,9 +109,4 @@ func (s *settings) UpdateFrom(frame *http2.SettingsFrame) error {
 		s.v[i.ID] = i.Val
 		return nil
 	})
-}
-
-func (s *settings) UseSetting(id http2.SettingID) (uint32, func()) {
-	s.mu.RLock()
-	return s.v[id], s.mu.RUnlock
 }

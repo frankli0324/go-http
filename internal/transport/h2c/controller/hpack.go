@@ -10,7 +10,7 @@ import (
 )
 
 type hpackMixin struct {
-	ps     *settings
+	c      *Controller
 	hpEnc  *hpack.Encoder
 	lastSz uint32
 
@@ -23,7 +23,7 @@ func (h *hpackMixin) init(c *Controller) {
 	h.wBuf = &bytes.Buffer{}
 	h.hpEnc = hpack.NewEncoder(h.wBuf)
 	h.lastSz = h.hpEnc.MaxDynamicTableSize()
-	h.ps = c.peerSettings
+	h.c = c
 }
 
 // EncodeHeaders encodes HEADERS frame BlockFragment
@@ -38,13 +38,13 @@ func (h *hpackMixin) EncodeHeaders(enumHeaders func(func(k, v string)), do func(
 		total += f.Size()
 		// if total > settings.max header size { error }
 	})
-	maxWriteHeaderListSize, done1 := h.ps.UseSetting(http2.SettingMaxHeaderListSize)
+	maxWriteHeaderListSize, done1 := h.c.UsePeerSetting(http2.SettingMaxHeaderListSize)
 	defer done1()
 	if total > maxWriteHeaderListSize {
 		return errors.New("http2: request header list larger than peer's advertised limit")
 	}
 
-	headerTabSize, done2 := h.ps.UseSetting(http2.SettingHeaderTableSize)
+	headerTabSize, done2 := h.c.UsePeerSetting(http2.SettingHeaderTableSize)
 	defer done2()
 	if h.lastSz != headerTabSize {
 		h.hpEnc.SetMaxDynamicTableSize(headerTabSize)

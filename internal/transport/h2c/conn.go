@@ -1,6 +1,7 @@
 package h2c
 
 import (
+	"errors"
 	"io"
 	"net"
 	"sync"
@@ -17,7 +18,11 @@ func NewConnection(c net.Conn) *Connection {
 		controller:    ctrl,
 		lastStreamID:  -1, /* step up by 2 */
 		activeStreams: make(map[uint32]*Stream),
+		inflow:        &inflow{}, // TODO: support configure custom flow ctrl
+		outflow:       &outflow{},
 	}
+	conn.condOutflow.L = &sync.Mutex{}
+
 	conn.condActive = sync.NewCond(&conn.muActive)
 	ctrl.OnHeader(func(frame *http2.MetaHeadersFrame) {
 		conn.withStream(frame.StreamID, func(active *Stream) error {
@@ -30,10 +35,28 @@ func NewConnection(c net.Conn) *Connection {
 		})
 	})
 	ctrl.OnData(func(frame *http2.DataFrame) {
+		if !conn.inflow.CheckAndPay(frame.Length) {
+			conn.GoAway(http2.ErrCodeFlowControl)
+		}
+		data := frame.Data()
+		pad := frame.Length - uint32(len(data))
+		if pad > 0 {
+			conn.inflow.Refund(pad)
+		}
 		conn.withStream(frame.StreamID, func(active *Stream) error {
-			ctrl.WriteWindowUpdate(frame.StreamID, frame.Length) // TODO: stream level flow control
-			if _, err := active.respWriter.Write(frame.Data()); err != nil {
-				return err
+			read := 0
+			for read != len(data) {
+				if n, err := active.respWriter.Write(data); err != nil {
+					if inc := conn.inflow.Refund(uint32(len(data) - n)); inc != 0 {
+						ctrl.WriteWindowUpdate(0, inc)
+					}
+					return err
+				} else {
+					if inc := conn.inflow.Refund(uint32(n)); inc != 0 {
+						ctrl.WriteWindowUpdate(0, inc)
+					}
+					read += n
+				}
 			}
 			if frame.StreamEnded() {
 				active.respWriter.Close()
@@ -41,7 +64,7 @@ func NewConnection(c net.Conn) *Connection {
 			}
 			return nil
 		})
-	}, func(ec http2.ErrCode) { conn.GoAway(ec) })
+	})
 	ctrl.OnStreamReset(func(frame *http2.RSTStreamFrame) {
 		if frame.ErrCode != http2.ErrCodeNo {
 			conn.withStream(frame.StreamID, func(active *Stream) error {
@@ -59,17 +82,81 @@ func NewConnection(c net.Conn) *Connection {
 		}
 		conn.muActive.Unlock()
 	})
-	ctrl.OnStreamWindowUpdate = func(streamID, incr uint32) {
-		conn.withStream(streamID, func(s *Stream) error {
-			// TODO
-			return nil
-		})
-	}
+	ctrl.OnSettings(func(sf *http2.SettingsFrame) {
+		if sf.IsAck() {
+			// TODO: activate pending self settings
+			return
+		}
+		done, err := ctrl.UpdatePeerSettings(sf)
+		defer done() // holding write lock, can read settings after ack is written and actions done
+		if err != nil {
+			var cerr http2.ConnectionError
+			var code = http2.ErrCodeProtocol
+			if errors.As(err, &cerr) {
+				code = http2.ErrCode(cerr)
+			}
+			conn.GoAwayDebug(code, []byte("received invalid settings frame"))
+			return
+		}
+
+		if iw, ok := sf.Value(http2.SettingInitialWindowSize); ok {
+			// rfc9113 6.9.2:
+			//
+			// In addition to changing the flow-control window for streams that are not yet active,
+			// a SETTINGS frame can alter the initial flow-control window size for streams with
+			// active flow-control windows (that is, streams in the "open" or "half-closed (remote)" state).
+			// When the value of SETTINGS_INITIAL_WINDOW_SIZE changes, a receiver MUST adjust the size of all
+			// stream flow-control windows that it maintains by the difference between the new value and the
+			// old value.
+			conn.muActive.Lock()
+			defer conn.muActive.Unlock() // prevent frame writes until after ack is written
+			conn.condOutflow.L.Lock()
+			for _, stream := range conn.activeStreams {
+				stream.outflow.ResetInitialBalance(iw)
+			}
+			conn.condOutflow.L.Unlock()
+			conn.condOutflow.Broadcast()
+		}
+
+		_ = ctrl.WriteSettingsAck()
+	})
+
+	swnd, done := ctrl.UseSelfSetting(http2.SettingInitialWindowSize)
+	conn.inflow.ResetInitialBalance(swnd)
+	done()
+	// rfc7540 S 6.9.2.: A SETTINGS frame cannot alter the connection flow-control window.
+	// so conn.outflow.ResetInitialBalance is called only at initialization
+	iw, done := ctrl.UsePeerSetting(http2.SettingInitialWindowSize)
+	conn.outflow.ResetInitialBalance(iw)
+	done()
+	ctrl.OnAfterHandshake(func() {
+	})
+	ctrl.OnWindowUpdate(func(frame *http2.WindowUpdateFrame) {
+		conn.condOutflow.L.Lock()
+		defer conn.condOutflow.L.Unlock()
+		if frame.StreamID == 0 {
+			if !conn.outflow.Refund(frame.Increment) {
+				conn.GoAway(http2.ErrCodeFlowControl)
+			}
+		} else {
+			conn.withStream(frame.StreamID, func(s *Stream) error {
+				if !s.outflow.Refund(frame.Increment) {
+					s.Reset(http2.ErrCodeFlowControl, false)
+				}
+				return nil
+			})
+		}
+		conn.condOutflow.Broadcast()
+	})
 	return conn
 }
 
 type Connection struct {
 	net.Conn
+	inflow      InflowCtrl
+	outflow     OutflowCtrl
+	condOutflow sync.Cond
+
 	controller   *controller.Controller
 	lastStreamID int32
 
@@ -105,17 +192,12 @@ func (c *Connection) Stream() (*Stream, error) {
 	s := &Stream{
 		Connection:  c,
 		chanHeaders: make(chan *http2.MetaHeadersFrame),
-		done:        make(chan interface{}),
-		respReader:  r,
-		respWriter:  w,
+		done:        make(chan struct{}),
+
+		respReader: r, respWriter: w,
+
+		inflow: &inflow{}, outflow: &outflow{},
 	}
-	// TODO: rfc7540 6.9.2
-	// In addition to changing the flow-control window for streams that are not yet active,
-	// a SETTINGS frame can alter the initial flow-control window size for streams with
-	// active flow-control windows (that is, streams in the "open" or "half-closed (remote)" state).
-	// When the value of SETTINGS_INITIAL_WINDOW_SIZE changes, a receiver MUST adjust the size of all
-	// stream flow-control windows that it maintains by the difference between the new value and the
-	// old value.
 	return s, nil
 }
 
@@ -140,6 +222,12 @@ func (c *Connection) AssignStreamID(s *Stream) func() {
 	c.activeStreams[s.streamID] = s
 	c.muActive.Unlock()
 	done()
+	pwnd, done := s.controller.UsePeerSetting(http2.SettingInitialWindowSize)
+	s.outflow.ResetInitialBalance(pwnd)
+	done()
+	swnd, done := s.controller.UseSelfSetting(http2.SettingInitialWindowSize)
+	s.inflow.ResetInitialBalance(swnd) // should be always valid
+	done()
 	return c.muNewStream.Unlock
 }
 
@@ -150,6 +238,10 @@ func (c *Connection) Close() error {
 
 func (c *Connection) GoAway(code http2.ErrCode) error {
 	return c.controller.GoAway(uint32(atomic.LoadInt32(&c.lastStreamID)), code)
+}
+
+func (c *Connection) GoAwayDebug(code http2.ErrCode, debug []byte) error {
+	return c.controller.GoAwayDebug(uint32(atomic.LoadInt32(&c.lastStreamID)), code, debug)
 }
 
 // ShouldProcess checks if stream should be retried on a new connection

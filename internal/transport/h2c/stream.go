@@ -13,6 +13,8 @@ import (
 
 type Stream struct {
 	*Connection
+	inflow   InflowCtrl
+	outflow  OutflowCtrl
 	streamID uint32
 
 	// TODO: don't block receiving loop
@@ -25,7 +27,7 @@ type Stream struct {
 	doneReason error
 	doneOnce   sync.Once
 
-	done chan interface{} // either us or them reset the stream
+	done chan struct{} // either us or them reset the stream
 }
 
 func (s *Stream) Valid() bool {
@@ -173,10 +175,25 @@ var bodyWriteBuf = (&bufPool{}).init(
 		math.MaxInt},
 )
 
+func (s *Stream) takeOutflow(sz uint32) uint32 {
+	s.condOutflow.L.Lock()
+	for !s.outflow.Available() || !s.Connection.outflow.Available() {
+		s.condOutflow.Wait()
+	}
+	take1 := s.outflow.Pay(sz)
+	take2 := s.Connection.outflow.Pay(take1)
+	if take2 < take1 {
+		// returning less than had, will not overflow
+		s.outflow.Refund(take1 - take2)
+	}
+	s.condOutflow.L.Unlock()
+	return take2
+}
+
 func (s *Stream) WriteRequestBody(ctx context.Context, data io.Reader, sz int64, last bool) error {
 	read := int64(0)
-	maxWriteFrameSz, done := s.controller.UsePeerSetting(http2.SettingMaxFrameSize)
-	defer done()
+	maxWriteFrameSz, doneMWFS := s.controller.UsePeerSetting(http2.SettingMaxFrameSize)
+	defer doneMWFS()
 	bufSz := int(maxWriteFrameSz)
 	if sz != -1 {
 		bufSz = min(int(bufSz), int(sz))
@@ -184,27 +201,27 @@ func (s *Stream) WriteRequestBody(ctx context.Context, data io.Reader, sz int64,
 	buffer, bufIdx := bodyWriteBuf.get(bufSz)
 	defer bodyWriteBuf.put(bufIdx, buffer)
 	chunk := (*buffer)[:bufSz]
-	current := 0
-	readThreshold := min(bufSz-1024, 512)
+	current := uint32(0)
+	readThreshold := uint32(min(bufSz-1024, 512))
 	sawEOF := false
+	var lastRdErr error
 	for {
 		select {
 		case <-ctx.Done():
 			return errs.ErrStreamCancelled(s.streamID)
 		default:
 		}
-		var err error
 		if !sawEOF && current < readThreshold {
 			var l int
-			l, err = data.Read(chunk[current:])
-			sawEOF = err == io.EOF
-			current += l
+			l, lastRdErr = data.Read(chunk[current:])
+			sawEOF = lastRdErr == io.EOF
+			current += uint32(l)
 			read += int64(l)
 		}
-		endStream := last && sawEOF
-		if current > 0 || endStream {
-			w, err := s.controller.WriteData(s.streamID, endStream, chunk[:current])
-			if err != nil {
+		w := s.takeOutflow(current)
+		endStream := last && sawEOF && w == current
+		if w > 0 || endStream {
+			if err := s.controller.WriteData(s.streamID, endStream, chunk[:w]); err != nil {
 				return errs.ErrFramerWrite(s.streamID).Wrap(err)
 			}
 			copy(chunk[:current-w], chunk[w:current])
@@ -213,12 +230,12 @@ func (s *Stream) WriteRequestBody(ctx context.Context, data io.Reader, sz int64,
 		if sz != -1 && read > sz {
 			return errs.ErrReqBodyTooLong(s.streamID)
 		}
-		if err != nil {
-			if err == io.EOF && sz != -1 && read < sz {
-				err = io.ErrUnexpectedEOF
+		if endStream {
+			if lastRdErr == io.EOF && sz != -1 && read < sz {
+				lastRdErr = io.ErrUnexpectedEOF
 			}
-			if err != io.EOF {
-				return errs.ErrReqBodyRead(s.streamID).Wrap(err)
+			if lastRdErr != io.EOF {
+				return errs.ErrReqBodyRead(s.streamID).Wrap(lastRdErr)
 			}
 			return nil // EOF
 		}

@@ -15,11 +15,10 @@ func NewController(c net.Conn) *Controller {
 		Conn: c,
 		done: make(chan struct{}),
 	}
-	conn.settingsMixin = newSettingsMixin(conn)
+	conn.settingsMixin = newSettingsMixin()
 	conn.hpackMixin.init(conn)
 	conn.framerMixin.init(conn)
 	conn.pingMixin.init(conn)
-	conn.flowControlMixin.init(conn)
 	conn.on[http2.FrameGoAway] = func(f http2.Frame) {
 		frame := f.(*http2.GoAwayFrame)
 
@@ -60,7 +59,6 @@ type Controller struct {
 	framerMixin
 	hpackMixin
 	pingMixin
-	flowControlMixin // only for control stream (streamID=0)
 
 	settingsMixin
 
@@ -111,7 +109,7 @@ func (c *Controller) Handshake() error {
 		return err
 	}
 
-	if err := c.AdvertiseSelfSettings(c); err != nil {
+	if err := c.advertiseSettings(c); err != nil {
 		return err
 	}
 	// The server connection preface consists of a potentially empty SETTINGS frame
@@ -177,18 +175,9 @@ func (c *Controller) OnStreamReset(cb func(*http2.RSTStreamFrame)) {
 	}
 }
 
-func (c *Controller) OnData(cb func(*http2.DataFrame), onerr func(http2.ErrCode)) {
+func (c *Controller) OnData(cb func(*http2.DataFrame)) {
 	c.on[http2.FrameData] = func(f http2.Frame) {
-		frame := f.(*http2.DataFrame)
-		dl := uint32(len(frame.Data()))
-		if !c.inflow.stage(dl) {
-			onerr(http2.ErrCodeFlowControl)
-		} else {
-			cb(frame)
-		}
-		if inc := c.inflow.grant(uint32(len(frame.Data()))); inc != 0 {
-			c.WriteWindowUpdate(0, inc)
-		}
+		cb(f.(*http2.DataFrame))
 	}
 }
 
@@ -202,16 +191,20 @@ func (c *Controller) OnHeader(cb func(*http2.MetaHeadersFrame)) {
 	}
 }
 
-func (c *Controller) WriteData(streamID uint32, endStream bool, data []byte) (int, error) {
-	// wraps framer WriteData for connection level flow control
-	if len(data) != 0 {
-		bat := c.outflow.take(int32(len(data)))
-		data = data[:bat]
+func (c *Controller) OnWindowUpdate(cb func(*http2.WindowUpdateFrame)) {
+	c.on[http2.FrameWindowUpdate] = func(f http2.Frame) {
+		cb(f.(*http2.WindowUpdateFrame))
 	}
-	if err := c.framerMixin.WriteData(streamID, endStream, data); err != nil {
-		return 0, err
+}
+
+func (c *Controller) OnSettings(cb func(*http2.SettingsFrame)) {
+	c.on[http2.FrameSettings] = func(f http2.Frame) {
+		cb(f.(*http2.SettingsFrame))
 	}
-	return len(data), nil
+}
+
+func (c *Controller) OnAfterHandshake(cb func()) {
+	c.onAfterHandshake = append(c.onAfterHandshake, cb)
 }
 
 func (c *Controller) OnRemoteGoAway(cb func(lastStreamID uint32, errCode http2.ErrCode)) {
