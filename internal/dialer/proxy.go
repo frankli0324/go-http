@@ -16,8 +16,8 @@ import (
 )
 
 type ProxyConfig struct {
-	TLSConfig      *tls.Config // the [*tls.Config] to use with proxy, if nil, *[CoreDialer.TLSConfig] will be used
-	ResolveLocally bool
+	TLSConfig      *tls.Config    // the [*tls.Config] to use with proxy, if nil, *[CoreDialer.TLSConfig] will be used
+	ResolveLocally bool           // resolve the hostname though DNS before dialing through proxy
 	ResolveConfig  *ResolveConfig // overrides the resolver config for dialer for proxy
 }
 

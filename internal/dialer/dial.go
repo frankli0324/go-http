@@ -26,6 +26,9 @@ var customDnsDialer = net.Dialer{
 func (d *CoreDialer) dialRaw(ctx context.Context, addr, port string) (net.Conn, error) {
 	// if needCustomDial(d.ResolveConfig) {}
 	// as of now net.Dialer could handle current DNS configurations
+	if d.ResolveConfig == nil {
+		return zeroDialer.DialContext(ctx, "tcp", net.JoinHostPort(addr, port))
+	}
 	network, dialer, dialctx, dst := "tcp", &zeroDialer, ctx, ""
 
 	if d.ResolveConfig.Network == "ip4" {
