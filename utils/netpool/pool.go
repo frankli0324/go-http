@@ -27,7 +27,6 @@ func NewPool(maxIdle, maxConn uint) *Pool {
 }
 
 func (p *Pool) Connect(ctx context.Context, dial func(ctx context.Context) (net.Conn, error)) (Conn, error) {
-	p.connTicket <- nil
 	for {
 		select {
 		case c := <-p.idleTicket:
@@ -37,6 +36,7 @@ func (p *Pool) Connect(ctx context.Context, dial func(ctx context.Context) (net.
 				return c, nil
 			}
 		default:
+			p.connTicket <- nil
 			c, err := dial(ctx)
 			return &conn{conn: c, p: p}, err
 		}
