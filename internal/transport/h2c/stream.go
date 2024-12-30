@@ -82,28 +82,6 @@ func (s *Stream) Reset(code http2.ErrCode, isReceived bool) (err error) {
 	return err
 }
 
-// HandleWrite handles errors and timeouts from [WriteHeaders] and [WriteRequestBody]
-func (s *Stream) HandleWrite(ctx context.Context, writeAction func(context.Context) error) (err error) {
-	done := make(chan struct{})
-	go func() { err = writeAction(ctx); close(done) }()
-	select {
-	case <-done:
-	case <-ctx.Done():
-		err = errs.ErrStreamCancelled(s.streamID)
-	}
-	if err == nil {
-		return nil
-	}
-	if err == errs.ErrStreamCancelled(s.streamID) {
-		s.Reset(http2.ErrCodeCancel, false)
-	} else if errors.Is(err, errs.ErrFramerWrite(s.streamID)) {
-		s.Reset(http2.ErrCodeProtocol, false)
-	} else if err != nil {
-		s.Reset(http2.ErrCodeInternal, false)
-	}
-	return err
-}
-
 // TODO: maybe change this api
 func (s *Stream) WriteHeaders(ctx context.Context, enumHeaders func(func(k, v string)), last bool) error {
 	return s.controller.EncodeHeaders(enumHeaders, func(data []byte) error {

@@ -10,6 +10,9 @@ import (
 
 	"github.com/frankli0324/go-http/internal/http"
 	"github.com/frankli0324/go-http/internal/transport/h2c"
+	errs "github.com/frankli0324/go-http/internal/transport/h2c/errors"
+
+	"golang.org/x/net/http2"
 )
 
 type H2C struct{}
@@ -61,9 +64,10 @@ func (h H2C) WriteRequest(ctx context.Context, s *h2c.Stream, req *http.Prepared
 	defer stream.Close()
 	hasBody := stream != http.NoBody
 
-	writtenHeader := s.Connection.AssignStreamID(s)
-	return s.HandleWrite(ctx, func(ctx context.Context) error {
-		err := s.WriteHeaders(ctx, func(f func(k, v string)) {
+	streamID, writtenHeaders := s.Connection.AssignStreamID(s)
+	done := make(chan struct{})
+	go func() {
+		err = s.WriteHeaders(ctx, func(f func(k, v string)) {
 			f(":method", req.Method)
 			f(":authority", req.HeaderHost)
 			if req.Method != "CONNECT" {
@@ -79,16 +83,32 @@ func (h H2C) WriteRequest(ctx context.Context, s *h2c.Stream, req *http.Prepared
 				f("content-length", strconv.FormatInt(req.ContentLength, 10))
 			}
 		}, !hasBody /* && request has no trailers */)
+		writtenHeaders() // can start write next request header
 		if err != nil {
-			return err
+			return
 		}
-		writtenHeader() // can start write next request header
 		if hasBody {
 			err = s.WriteRequestBody(ctx, stream, req.ContentLength, true)
 		}
-		return err
 		// TODO: trailers support
-	})
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-ctx.Done():
+		err = errs.ErrStreamCancelled(streamID)
+	}
+	if err == nil {
+		return nil
+	}
+	if err == errs.ErrStreamCancelled(streamID) {
+		s.Reset(http2.ErrCodeCancel, false)
+	} else if errors.Is(err, errs.ErrFramerWrite(streamID)) {
+		s.Reset(http2.ErrCodeProtocol, false)
+	} else if err != nil {
+		s.Reset(http2.ErrCodeInternal, false)
+	}
+	return err
 }
 
 func getRawConn(c interface{}) net.Conn {

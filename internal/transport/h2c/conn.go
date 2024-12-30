@@ -208,7 +208,7 @@ func (c *Connection) ReleaseStreamID(s *Stream) {
 	c.condActive.Signal()
 }
 
-func (c *Connection) AssignStreamID(s *Stream) func() {
+func (c *Connection) AssignStreamID(s *Stream) (sid uint32, writtenHeaders func()) {
 	c.muActive.Lock()
 	maxConcStreams, done := c.controller.UsePeerSetting(http2.SettingMaxConcurrentStreams)
 	for len(c.activeStreams) >= int(maxConcStreams) {
@@ -228,7 +228,7 @@ func (c *Connection) AssignStreamID(s *Stream) func() {
 	swnd, done := s.controller.UseSelfSetting(http2.SettingInitialWindowSize)
 	s.inflow.ResetInitialBalance(swnd) // should be always valid
 	done()
-	return c.muNewStream.Unlock
+	return s.streamID, c.muNewStream.Unlock
 }
 
 func (c *Connection) Close() error {
