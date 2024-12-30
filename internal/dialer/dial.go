@@ -60,9 +60,8 @@ func (d *CoreDialer) Dial(ctx context.Context, r *http.PreparedRequest) (io.Read
 			return nil, err
 		}
 	}
-	re, err := pool.Connect(ctx, netpool.ConnRequest{
-		Key: dialKey{addr, port, proxy},
-		Dial: func(ctx context.Context) (conn net.Conn, err error) {
+	re, err := pool.Connect(ctx, dialKey{addr, port, proxy},
+		func(ctx context.Context) (conn net.Conn, err error) {
 			if proxy != "" {
 				purl, perr := url.Parse(proxy)
 				if perr != nil {
@@ -96,7 +95,7 @@ func (d *CoreDialer) Dial(ctx context.Context, r *http.PreparedRequest) (io.Read
 			}
 			return conn, nil
 		},
-	})
+	)
 	if err != nil {
 		return nil, err
 	}

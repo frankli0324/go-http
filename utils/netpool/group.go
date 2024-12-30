@@ -6,37 +6,32 @@ import (
 	"sync"
 )
 
-type ConnRequest struct {
-	Key  interface{}
-	Dial func(ctx context.Context) (net.Conn, error)
-}
-
-type connGroup struct {
+type PoolGroup struct {
 	sync.RWMutex
-	pools map[interface{}]*connPool
+	pools map[interface{}]*Pool
 
 	maxConnsPerHost, maxIdlePerHost uint
 }
 
-func NewGroup(maxConnsPerHost, maxIdlePerHost uint) *connGroup {
-	return &connGroup{
-		pools:           map[interface{}]*connPool{},
+func NewGroup(maxConnsPerHost, maxIdlePerHost uint) *PoolGroup {
+	return &PoolGroup{
+		pools:           map[interface{}]*Pool{},
 		maxConnsPerHost: maxConnsPerHost, maxIdlePerHost: maxIdlePerHost,
 	}
 }
 
-func (g *connGroup) Connect(ctx context.Context, req ConnRequest) (Conn, error) {
+func (g *PoolGroup) Connect(ctx context.Context, key interface{}, dial func(ctx context.Context) (net.Conn, error)) (Conn, error) {
 	g.RLock()
-	p, ok := g.pools[req.Key]
+	p, ok := g.pools[key]
 	g.RUnlock()
 	if ok {
-		return p.Connect(ctx)
+		return p.Connect(ctx, dial)
 	}
 	g.Lock()
-	if p, ok = g.pools[req.Key]; !ok {
-		p = NewPool(g.maxIdlePerHost, g.maxConnsPerHost, req.Dial)
-		g.pools[req.Key] = p
+	if p, ok = g.pools[key]; !ok {
+		p = NewPool(g.maxIdlePerHost, g.maxConnsPerHost)
+		g.pools[key] = p
 	}
 	g.Unlock()
-	return p.Connect(ctx)
+	return p.Connect(ctx, dial)
 }

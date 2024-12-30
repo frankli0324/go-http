@@ -10,8 +10,25 @@ import (
 
 type conn struct {
 	conn     net.Conn
+	p        *Pool
 	IsClosed uint32
 	LastIdle time.Time
+}
+
+// Raw implements Conn.
+func (c *conn) Raw() net.Conn {
+	return c.conn
+}
+
+func (c *conn) Release() {
+	if c.Available() {
+		c.LastIdle = time.Now()
+		select {
+		case c.p.idleTicket <- c:
+		default:
+			c.Close()
+		}
+	}
 }
 
 func (c *conn) Available() bool {
@@ -43,5 +60,6 @@ func (c *conn) Read(p []byte) (n int, err error) {
 func (c *conn) Close() error {
 	err := c.conn.Close()
 	atomic.StoreUint32(&c.IsClosed, 1)
+	<-c.p.connTicket
 	return err
 }

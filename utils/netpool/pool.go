@@ -13,43 +13,20 @@ type Conn interface {
 	Raw() net.Conn
 }
 
-type releaser struct {
-	p *connPool
-	*conn
-}
-
-func (r releaser) Release() {
-	r.p.Release(r.conn)
-	<-r.p.connTicket
-}
-
-func (r releaser) Close() error {
-	err := r.conn.Close()
-	<-r.p.connTicket
-	return err
-}
-
-func (r releaser) Raw() net.Conn {
-	return r.conn.conn
-}
-
-type connPool struct {
+type Pool struct {
 	connTicket      chan interface{}
 	idleTicket      chan *conn
 	maxIdleDuration time.Duration
-
-	dialer func(ctx context.Context) (net.Conn, error)
 }
 
-func NewPool(maxIdle, maxConn uint, dialer func(ctx context.Context) (net.Conn, error)) *connPool {
-	return &connPool{
+func NewPool(maxIdle, maxConn uint) *Pool {
+	return &Pool{
 		connTicket: make(chan interface{}, maxConn),
 		idleTicket: make(chan *conn, maxIdle),
-		dialer:     dialer,
 	}
 }
 
-func (p *connPool) Connect(ctx context.Context) (Conn, error) {
+func (p *Pool) Connect(ctx context.Context, dial func(ctx context.Context) (net.Conn, error)) (Conn, error) {
 	p.connTicket <- nil
 	for {
 		select {
@@ -57,22 +34,11 @@ func (p *connPool) Connect(ctx context.Context) (Conn, error) {
 			if p.maxIdleDuration != 0 && time.Since(c.LastIdle) > p.maxIdleDuration {
 				c.Close()
 			} else if c.Available() {
-				return releaser{p, c}, nil
+				return c, nil
 			}
 		default:
-			c, err := p.dialer(ctx)
-			return releaser{p, &conn{conn: c}}, err
-		}
-	}
-}
-
-func (p *connPool) Release(c *conn) {
-	if c.Available() {
-		c.LastIdle = time.Now()
-		select {
-		case p.idleTicket <- c:
-		default:
-			c.Close()
+			c, err := dial(ctx)
+			return &conn{conn: c, p: p}, err
 		}
 	}
 }
