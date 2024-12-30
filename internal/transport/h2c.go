@@ -96,14 +96,14 @@ func (h H2C) WriteRequest(ctx context.Context, s *h2c.Stream, req *http.Prepared
 	select {
 	case <-done:
 	case <-ctx.Done():
-		err = errs.ErrStreamCancelled(streamID)
+		err = errs.ErrStreamCancelled.Stream(streamID)
 	}
 	if err == nil {
 		return nil
 	}
-	if err == errs.ErrStreamCancelled(streamID) {
+	if errors.Is(err, errs.ErrStreamCancelled) {
 		s.Reset(http2.ErrCodeCancel, false)
-	} else if errors.Is(err, errs.ErrFramerWrite(streamID)) {
+	} else if errors.Is(err, errs.ErrFramerWrite) {
 		s.Reset(http2.ErrCodeProtocol, false)
 	} else if err != nil {
 		s.Reset(http2.ErrCodeInternal, false)

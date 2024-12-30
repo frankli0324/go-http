@@ -91,7 +91,7 @@ func (s *Stream) WriteHeaders(ctx context.Context, enumHeaders func(func(k, v st
 		for len(data) > 0 {
 			select {
 			case <-ctx.Done():
-				return errs.ErrStreamCancelled(s.streamID)
+				return errs.ErrStreamCancelled.Stream(s.streamID)
 			default:
 			}
 			var chunk []byte
@@ -117,7 +117,7 @@ func (s *Stream) WriteHeaders(ctx context.Context, enumHeaders func(func(k, v st
 			}
 			done()
 			if err != nil {
-				return errs.ErrFramerWrite(s.streamID).Wrap(err)
+				return errs.ErrFramerWrite.Stream(s.streamID).Wrap(err)
 			}
 		}
 		return nil
@@ -128,7 +128,7 @@ func (s *Stream) WriteHeaders(ctx context.Context, enumHeaders func(func(k, v st
 func (s *Stream) ReadHeaders(ctx context.Context, headersCb func(k, v string) error) error {
 	select {
 	case <-ctx.Done():
-		return errs.ErrStreamCancelled(s.streamID).Wrap(s.Reset(http2.ErrCodeCancel, false))
+		return errs.ErrStreamCancelled.Stream(s.streamID).Wrap(s.Reset(http2.ErrCodeCancel, false))
 	case <-s.done:
 		return s.doneReason
 	case headers := <-s.chanHeaders:
@@ -186,7 +186,7 @@ func (s *Stream) WriteRequestBody(ctx context.Context, data io.Reader, sz int64,
 	for {
 		select {
 		case <-ctx.Done():
-			return errs.ErrStreamCancelled(s.streamID)
+			return errs.ErrStreamCancelled.Stream(s.streamID)
 		default:
 		}
 		if !sawEOF && current < readThreshold {
@@ -200,20 +200,20 @@ func (s *Stream) WriteRequestBody(ctx context.Context, data io.Reader, sz int64,
 		endStream := last && sawEOF && w == current
 		if w > 0 || endStream {
 			if err := s.controller.WriteData(s.streamID, endStream, chunk[:w]); err != nil {
-				return errs.ErrFramerWrite(s.streamID).Wrap(err)
+				return errs.ErrFramerWrite.Stream(s.streamID).Wrap(err)
 			}
 			copy(chunk[:current-w], chunk[w:current])
 			current -= w
 		}
 		if sz != -1 && read > sz {
-			return errs.ErrReqBodyTooLong(s.streamID)
+			return errs.ErrReqBodyTooLong.Stream(s.streamID)
 		}
 		if endStream {
 			if lastRdErr == io.EOF && sz != -1 && read < sz {
 				lastRdErr = io.ErrUnexpectedEOF
 			}
 			if lastRdErr != io.EOF {
-				return errs.ErrReqBodyRead(s.streamID).Wrap(lastRdErr)
+				return errs.ErrReqBodyRead.Stream(s.streamID).Wrap(lastRdErr)
 			}
 			return nil // EOF
 		}

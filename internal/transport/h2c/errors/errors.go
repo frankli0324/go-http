@@ -20,6 +20,10 @@ func (e StreamError) Error() string {
 	return msg
 }
 
+func (e StreamError) Stream(streamID uint32) StreamError {
+	return StreamError{e.msg, streamID, e.error}
+}
+
 func (e StreamError) Wrap(err error) StreamError {
 	if err == nil {
 		return e
@@ -38,16 +42,12 @@ func (e StreamError) Is(err error) bool {
 	return false
 }
 
-func reg(msg string) func(streamID uint32) StreamError {
-	return func(streamID uint32) StreamError { return StreamError{msg, streamID, nil} }
-}
-
 var (
-	ErrStreamCancelled = reg("stream cancelled by context")
-	ErrStreamReset     = reg("stream already been reset")
-	ErrReqBodyTooLong  = reg("internal: request body larger than specified content length")
-	ErrReqBodyRead     = reg("internal: request body read error")
-	ErrFramerWrite     = reg("internal: framer write error")
+	ErrStreamCancelled = StreamError{"stream cancelled by context", 0, nil}
+	ErrStreamReset     = StreamError{"stream already been reset", 0, nil}
+	ErrReqBodyTooLong  = StreamError{"internal: request body larger than specified content length", 0, nil}
+	ErrReqBodyRead     = StreamError{"internal: request body read error", 0, nil}
+	ErrFramerWrite     = StreamError{"internal: framer write error", 0, nil}
 )
 
 type h2Code http2.ErrCode
