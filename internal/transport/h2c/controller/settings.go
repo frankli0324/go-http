@@ -28,9 +28,9 @@ func (s *settingsMixin) UseSelfSetting(id http2.SettingID) (uint32, func()) {
 	return s.selfSettings.v[id], s.muSelf.RUnlock
 }
 
-func (s *settingsMixin) UpdatePeerSettings(sf *http2.SettingsFrame) (func(), error) {
+func (s *settingsMixin) UpdatePeerSettings(sf *http2.SettingsFrame, cb func(s http2.SettingID, old, new uint32)) (func(), error) {
 	s.muPeer.Lock()
-	return s.muPeer.Unlock, s.peerSettings.UpdateFrom(sf)
+	return s.muPeer.Unlock, s.peerSettings.UpdateFrom(sf, cb)
 }
 
 func (s *settingsMixin) ConfigureReadSetting(id http2.SettingID, val uint32) error {
@@ -91,7 +91,7 @@ type settings struct {
 	v [8]uint32 // http2.SettingID -> Val
 }
 
-func (s *settings) UpdateFrom(frame *http2.SettingsFrame) error {
+func (s *settings) UpdateFrom(frame *http2.SettingsFrame, cb func(s http2.SettingID, old, new uint32)) error {
 	return frame.ForeachSetting(func(i http2.Setting) error {
 		if err := i.Valid(); err != nil {
 			return err
@@ -106,6 +106,7 @@ func (s *settings) UpdateFrom(frame *http2.SettingsFrame) error {
 			// unknown or unsupported identifier MUST ignore that setting.
 			return nil
 		}
+		cb(i.ID, s.v[i.ID], i.Val)
 		s.v[i.ID] = i.Val
 		return nil
 	})

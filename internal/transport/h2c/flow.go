@@ -7,7 +7,6 @@ type InflowCtrl interface {
 }
 
 type OutflowCtrl interface {
-	ResetInitialBalance(sz uint32) bool
 	Available() bool
 	Pay(sz uint32) uint32
 	Refund(sz uint32) bool
@@ -63,16 +62,7 @@ type outflow struct {
 	//
 	// so we can maintain incoming remains with int32 instead of uint32
 	// to track negative values
-	initial int32
-	diff    int32
-}
-
-func (fm *outflow) ResetInitialBalance(sz uint32) bool {
-	if sz+uint32(fm.diff) > maxFlowControlWindow {
-		return false
-	}
-	fm.initial = int32(sz)
-	return true
+	n int32
 }
 
 func (fm *outflow) Available() bool {
@@ -82,23 +72,23 @@ func (fm *outflow) Available() bool {
 	// negative flow-control window and MUST NOT send new flow-controlled frames
 	// until it receives WINDOW_UPDATE frames that cause the flow-control
 	// window to become positive.
-	return fm.initial+fm.diff > 0
+	return fm.n > 0
 }
 
 func (fm *outflow) Pay(sz uint32) uint32 {
 	got := sz
-	if avail := uint32(fm.initial + fm.diff); avail < sz {
+	if avail := uint32(fm.n); avail < sz {
 		got = avail
 	}
-	fm.diff -= int32(got)
+	fm.n -= int32(got)
 	return got
 }
 
 func (fm *outflow) Refund(sz uint32) bool {
-	sum := fm.diff + int32(sz)
+	sum := fm.n + int32(sz)
 	// smart overflow detection that works for negative incrs from golang.org/x/net
-	if (sum+fm.initial > int32(sz)) == (fm.diff+fm.initial > 0) {
-		fm.diff = sum
+	if (sum > int32(sz)) == (fm.n > 0) {
+		fm.n = sum
 		return true
 	}
 	return false

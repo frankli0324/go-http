@@ -87,7 +87,20 @@ func NewConnection(c net.Conn) *Connection {
 			// TODO: activate pending self settings
 			return
 		}
-		done, err := ctrl.UpdatePeerSettings(sf)
+		done, err := ctrl.UpdatePeerSettings(sf, func(s http2.SettingID, old, new uint32) {
+			if s == http2.SettingInitialWindowSize {
+				// rfc9113 6.9.2
+				conn.condOutflow.L.Lock() // prevent frame writes until after ack is written
+				delta := new - old
+				conn.muActive.Lock()
+				for _, stream := range conn.activeStreams {
+					stream.outflow.Refund(delta)
+				}
+				conn.muActive.Unlock()
+				conn.condOutflow.L.Unlock()
+				conn.condOutflow.Broadcast()
+			}
+		})
 		defer done() // holding write lock, can read settings after ack is written and actions done
 		if err != nil {
 			var cerr http2.ConnectionError
@@ -99,25 +112,6 @@ func NewConnection(c net.Conn) *Connection {
 			return
 		}
 
-		if iw, ok := sf.Value(http2.SettingInitialWindowSize); ok {
-			// rfc9113 6.9.2:
-			//
-			// In addition to changing the flow-control window for streams that are not yet active,
-			// a SETTINGS frame can alter the initial flow-control window size for streams with
-			// active flow-control windows (that is, streams in the "open" or "half-closed (remote)" state).
-			// When the value of SETTINGS_INITIAL_WINDOW_SIZE changes, a receiver MUST adjust the size of all
-			// stream flow-control windows that it maintains by the difference between the new value and the
-			// old value.
-			conn.muActive.Lock()
-			defer conn.muActive.Unlock() // prevent frame writes until after ack is written
-			conn.condOutflow.L.Lock()
-			for _, stream := range conn.activeStreams {
-				stream.outflow.ResetInitialBalance(iw)
-			}
-			conn.condOutflow.L.Unlock()
-			conn.condOutflow.Broadcast()
-		}
-
 		_ = ctrl.WriteSettingsAck()
 	})
 
@@ -127,7 +121,7 @@ func NewConnection(c net.Conn) *Connection {
 	// rfc7540 S 6.9.2.: A SETTINGS frame cannot alter the connection flow-control window.
 	// so conn.outflow.ResetInitialBalance is called only at initialization
 	iw, done := ctrl.UsePeerSetting(http2.SettingInitialWindowSize)
-	conn.outflow.ResetInitialBalance(iw)
+	conn.outflow.Refund(iw)
 	done()
 	ctrl.OnAfterHandshake(func() {
 	})
@@ -153,8 +147,10 @@ func NewConnection(c net.Conn) *Connection {
 
 type Connection struct {
 	net.Conn
-	inflow      InflowCtrl
-	outflow     OutflowCtrl
+
+	inflow  InflowCtrl
+	outflow OutflowCtrl
+
 	condOutflow sync.Cond
 
 	controller   *controller.Controller
@@ -223,7 +219,7 @@ func (c *Connection) AssignStreamID(s *Stream) (sid uint32, writtenHeaders func(
 	c.muActive.Unlock()
 	done()
 	pwnd, done := s.controller.UsePeerSetting(http2.SettingInitialWindowSize)
-	s.outflow.ResetInitialBalance(pwnd)
+	s.outflow.Refund(pwnd)
 	done()
 	swnd, done := s.controller.UseSelfSetting(http2.SettingInitialWindowSize)
 	s.inflow.ResetInitialBalance(swnd) // should be always valid

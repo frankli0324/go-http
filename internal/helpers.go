@@ -3,7 +3,7 @@ package internal
 import (
 	"context"
 
-	"github.com/frankli0324/go-http/internal/dialer"
+	"github.com/frankli0324/go-http/dialer"
 	"github.com/frankli0324/go-http/internal/http"
 )
 
