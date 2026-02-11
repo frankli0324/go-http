@@ -82,7 +82,9 @@ func (d *CoreDialer) Dial(ctx context.Context, r *http.PreparedRequest) (io.Read
 				if config == nil {
 					config = &tls.Config{}
 				}
-				config.ServerName = r.U.Hostname()
+				if config.ServerName == "" {
+					config.ServerName = r.U.Hostname()
+				}
 				c := tls.Client(conn, config)
 				if err := c.HandshakeContext(ctx); err != nil {
 					return nil, err

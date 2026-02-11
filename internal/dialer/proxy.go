@@ -45,7 +45,7 @@ func (d *CoreDialer) DialContextOverProxy(ctx context.Context, remote, proxy *ur
 	}
 	hp := proxy.Host
 	if proxy.Port() == "" {
-		hp = proxy.Hostname() + schemes[proxy.Scheme]
+		hp = proxy.Hostname() + ":" + schemes[proxy.Scheme]
 	}
 
 	conn, err := zeroDialer.DialContext(ctx, "tcp", hp)
@@ -99,7 +99,7 @@ func (d *CoreDialer) DialContextOverProxy(ctx context.Context, remote, proxy *ur
 	// pools that dialing over h2 proxies is meaningful.
 	connReq := &http.PreparedRequest{
 		Request:    &http.Request{Method: "CONNECT"},
-		HeaderHost: remote.Host,
+		HeaderHost: proxy.Host,
 		U:          &url.URL{Path: addr + ":" + port},
 		GetBody:    func() (io.ReadCloser, error) { return http.NoBody, nil },
 	}
