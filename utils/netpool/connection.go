@@ -60,6 +60,8 @@ func (c *conn) Read(p []byte) (n int, err error) {
 func (c *conn) Close() error {
 	err := c.conn.Close()
 	atomic.StoreUint32(&c.IsClosed, 1)
-	<-c.p.connTicket
+	if c.p.connTicket != nil {
+		<-c.p.connTicket
+	}
 	return err
 }

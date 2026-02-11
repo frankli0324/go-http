@@ -9,10 +9,7 @@ import (
 
 	"github.com/frankli0324/go-http/internal/http"
 	"github.com/frankli0324/go-http/internal/transport/h2c"
-	"github.com/frankli0324/go-http/utils/netpool"
 )
-
-var pool = netpool.NewGroup(100, 80)
 
 var schemes = map[string]string{
 	"http": "80", "https": "443", "socks": "1080",
@@ -63,7 +60,7 @@ func (d *CoreDialer) Dial(ctx context.Context, r *http.PreparedRequest) (io.Read
 			return nil, err
 		}
 	}
-	re, err := pool.Connect(ctx, dialKey{addr, port, proxy},
+	re, err := d.ConnPool.Connect(ctx, dialKey{addr, port, proxy},
 		func(ctx context.Context) (conn net.Conn, err error) {
 			if proxy != "" {
 				purl, perr := url.Parse(proxy)

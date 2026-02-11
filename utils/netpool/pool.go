@@ -19,11 +19,12 @@ type Pool struct {
 	maxIdleDuration time.Duration
 }
 
-func NewPool(maxIdle, maxConn uint) *Pool {
-	return &Pool{
-		connTicket: make(chan interface{}, maxConn),
-		idleTicket: make(chan *conn, maxIdle),
+func NewPool(maxIdle, maxConn uint, maxIdleDuration time.Duration) (p *Pool) {
+	p = &Pool{idleTicket: make(chan *conn, maxIdle), maxIdleDuration: maxIdleDuration}
+	if maxConn != 0 {
+		p.connTicket = make(chan interface{}, maxConn)
 	}
+	return
 }
 
 func (p *Pool) Connect(ctx context.Context, dial func(ctx context.Context) (net.Conn, error)) (Conn, error) {
@@ -36,7 +37,9 @@ func (p *Pool) Connect(ctx context.Context, dial func(ctx context.Context) (net.
 				return c, nil
 			}
 		default:
-			p.connTicket <- nil
+			if p.connTicket != nil {
+				p.connTicket <- nil
+			}
 			c, err := dial(ctx)
 			return &conn{conn: c, p: p}, err
 		}

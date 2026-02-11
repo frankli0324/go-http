@@ -6,6 +6,7 @@ import (
 	"io"
 
 	"github.com/frankli0324/go-http/internal/http"
+	"github.com/frankli0324/go-http/utils/netpool"
 )
 
 // Dialers handle pretty much everything related to the actual connection,
@@ -22,6 +23,7 @@ type CoreDialer struct {
 
 	TLSConfig *tls.Config // the config to use
 
+	ConnPool    *netpool.PoolGroup
 	GetProxy    func(ctx context.Context, r *http.Request) (string, error)
 	ProxyConfig *ProxyConfig
 }
@@ -30,6 +32,7 @@ func (d *CoreDialer) Clone() *CoreDialer {
 	return &CoreDialer{
 		ResolveConfig: d.ResolveConfig.Clone(),
 		TLSConfig:     d.TLSConfig.Clone(),
+		ConnPool:      d.ConnPool.NewEmpty(),
 		GetProxy:      d.GetProxy,
 		ProxyConfig:   d.ProxyConfig.Clone(),
 	}

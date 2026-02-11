@@ -4,9 +4,11 @@ import (
 	"crypto/tls"
 	"io"
 	"net"
+	"time"
 
 	"github.com/frankli0324/go-http/internal/dialer"
 	"github.com/frankli0324/go-http/internal/transport/h2c"
+	"github.com/frankli0324/go-http/utils/netpool"
 )
 
 var defaultDialer = &dialer.CoreDialer{
@@ -17,6 +19,7 @@ var defaultDialer = &dialer.CoreDialer{
 		TLSConfig:      &tls.Config{}, // don't want h2
 		ResolveLocally: false,
 	},
+	ConnPool: netpool.NewGroup(100, 0, 90*time.Second),
 }
 
 func getRawConn(c io.ReadWriteCloser) net.Conn {
