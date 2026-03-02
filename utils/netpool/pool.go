@@ -43,16 +43,18 @@ func (p *Pool) tryGetConn() (got *state, ok bool) { // true for got conn, false 
 		}
 		if p.connTicket != nil {
 			select {
-			case p.connTicket <- nil:
-				return nil, false
 			case c := <-p.idleTicket:
 				if p.maxIdleDuration != 0 && time.Since(c.LastIdle) > p.maxIdleDuration {
 					c.Close()
 				} else if c.Available() {
 					return c, true
 				}
+				continue
+			case p.connTicket <- nil:
+				return nil, false
 			}
 		}
+		return
 	}
 }
 

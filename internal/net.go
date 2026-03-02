@@ -19,7 +19,7 @@ var defaultDialer = &dialer.CoreDialer{
 		TLSConfig:      &tls.Config{}, // don't want h2
 		ResolveLocally: false,
 	},
-	ConnPool: netpool.NewGroup(100, 0, 90*time.Second),
+	ConnPool: netpool.NewGroup(100, 100, 90*time.Second),
 }
 
 func getRawConn(c io.ReadWriteCloser) net.Conn {
