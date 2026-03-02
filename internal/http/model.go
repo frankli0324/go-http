@@ -1,6 +1,7 @@
 package http
 
 import (
+	"context"
 	"io"
 	"net/http"
 )
@@ -22,6 +23,12 @@ type Response struct {
 	StatusCode int
 	Header     http.Header
 
-	ContentLength int64
-	Body          io.ReadCloser
+	ContentLength    int64
+	TransferEncoding string
+
+	Body io.ReadCloser
+}
+
+type Conn interface {
+	Do(context.Context, *PreparedRequest, *Response) error
 }

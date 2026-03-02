@@ -114,7 +114,7 @@ func (c *Controller) Handshake() error {
 	}
 	// The server connection preface consists of a potentially empty SETTINGS frame
 	// that MUST be the first frame the server sends in the HTTP/2 connection.
-	// https://httpwg.org/specs/rfc7540.html#rfc.section.3.5
+	// https://datatracker.ietf.org/doc/html/rfc9113#section-3.4-6
 	f, err := c.ReadFrame()
 	if err != nil {
 		c.doneOnce.Do(func() {

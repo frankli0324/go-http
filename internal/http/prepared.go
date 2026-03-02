@@ -21,6 +21,8 @@ type PreparedRequest struct {
 	HeaderHost string
 
 	ContentLength int64
+
+	Written bool // set to true after Host header is written
 }
 
 func (r *Request) Prepare() (*PreparedRequest, error) {

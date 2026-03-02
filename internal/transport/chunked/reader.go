@@ -13,12 +13,11 @@ func NewChunkedReader(r io.Reader) io.Reader {
 	} else {
 		br = bufio.NewReader(r)
 	}
-	return &chunkedReader{br, nil, 0, 0}
+	return &chunkedReader{br, 0, -1}
 }
 
 type chunkedReader struct {
 	*bufio.Reader
-	currentChunk                   io.Reader
 	currentCount, currentChunkSize int64
 }
 
@@ -57,23 +56,27 @@ func (c *chunkedReader) readChunkHeader() (len uint64, err error) {
 }
 
 func (c *chunkedReader) Read(p []byte) (n int, err error) {
-	if c.currentChunk == nil {
+	if c.currentChunkSize == -1 {
 		l, err := c.readChunkHeader()
 		if err != nil {
 			return n, err
 		}
-		if l == 0 {
-			return 0, io.EOF
-		}
-		c.currentChunk = io.LimitReader(c.Reader, int64(l))
 		c.currentChunkSize = int64(l)
 	}
-	n, err = c.currentChunk.Read(p)
-	c.currentCount += int64(n)
-	if err == io.EOF {
-		if c.currentCount != c.currentChunkSize {
-			return n, io.ErrUnexpectedEOF
+	if c.currentChunkSize != 0 {
+		if int(c.currentChunkSize-c.currentCount) < len(p) {
+			p = p[:c.currentChunkSize-c.currentCount]
 		}
+		n, err = c.Reader.Read(p)
+		c.currentCount += int64(n)
+		if err != nil {
+			if err == io.EOF {
+				err = io.ErrUnexpectedEOF
+			}
+			return n, err
+		}
+	}
+	if c.currentCount == c.currentChunkSize {
 		err = nil
 		dr, _ := c.Reader.ReadByte()
 		dn, err := c.Reader.ReadByte()
@@ -86,8 +89,11 @@ func (c *chunkedReader) Read(p []byte) (n int, err error) {
 		if dr != '\r' || dn != '\n' {
 			return n, errors.New("malformed chunked encoding")
 		}
-		c.currentChunk = nil
+		if c.currentChunkSize == 0 {
+			return n, io.EOF
+		}
 		c.currentCount = 0
+		c.currentChunkSize = -1
 	}
 	return
 }

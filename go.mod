@@ -1,6 +1,6 @@
 module github.com/frankli0324/go-http
 
-go 1.17
+go 1.18
 
 require (
 	golang.org/x/net v0.17.0

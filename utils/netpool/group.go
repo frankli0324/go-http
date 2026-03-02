@@ -2,7 +2,6 @@ package netpool
 
 import (
 	"context"
-	"net"
 	"sync"
 	"time"
 )
@@ -28,7 +27,7 @@ func (g *PoolGroup) NewEmpty() *PoolGroup {
 	return NewGroup(g.maxConnsPerHost, g.maxIdlePerHost, g.maxIdleDuration)
 }
 
-func (g *PoolGroup) Connect(ctx context.Context, key interface{}, dial func(ctx context.Context) (net.Conn, error)) (Conn, error) {
+func (g *PoolGroup) Connect(ctx context.Context, key interface{}, dial func(ctx context.Context) (Conn, error)) (Session, error) {
 	g.RLock()
 	p, ok := g.pools[key]
 	g.RUnlock()

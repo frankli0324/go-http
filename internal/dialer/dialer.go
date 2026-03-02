@@ -3,7 +3,6 @@ package dialer
 import (
 	"context"
 	"crypto/tls"
-	"io"
 
 	"github.com/frankli0324/go-http/internal/http"
 	"github.com/frankli0324/go-http/utils/netpool"
@@ -14,7 +13,7 @@ import (
 type Dialer interface {
 	// Dial returns an abstract stream for writing the request and reading responses.
 	// the implementation of this stream could be specific to protocols.
-	Dial(ctx context.Context, r *http.PreparedRequest) (io.ReadWriteCloser, error)
+	Dial(ctx context.Context, r *http.PreparedRequest) (http.Conn, error)
 	Unwrap() Dialer
 }
 

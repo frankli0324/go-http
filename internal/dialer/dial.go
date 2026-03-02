@@ -3,12 +3,12 @@ package dialer
 import (
 	"context"
 	"crypto/tls"
-	"io"
 	"net"
 	"net/url"
 
 	"github.com/frankli0324/go-http/internal/http"
-	"github.com/frankli0324/go-http/internal/transport/h2c"
+	"github.com/frankli0324/go-http/internal/transport/http1"
+	"github.com/frankli0324/go-http/utils/netpool"
 )
 
 var schemes = map[string]string{
@@ -46,7 +46,7 @@ func (d *CoreDialer) dialRaw(ctx context.Context, addr, port string) (net.Conn, 
 	return dialer.DialContext(dialctx, network, dst)
 }
 
-func (d *CoreDialer) Dial(ctx context.Context, r *http.PreparedRequest) (io.ReadWriteCloser, error) {
+func (d *CoreDialer) Dial(ctx context.Context, r *http.PreparedRequest) (http.Conn, error) {
 	addr, port := r.U.Host, schemes[r.U.Scheme]
 	if add, prt, err := net.SplitHostPort(addr); err == nil {
 		addr, port = add, prt
@@ -61,7 +61,9 @@ func (d *CoreDialer) Dial(ctx context.Context, r *http.PreparedRequest) (io.Read
 		}
 	}
 	re, err := d.ConnPool.Connect(ctx, dialKey{addr, port, proxy},
-		func(ctx context.Context) (conn net.Conn, err error) {
+		func(ctx context.Context) (netpool.Conn, error) {
+			var conn net.Conn
+			var err error
 			if proxy != "" {
 				purl, perr := url.Parse(proxy)
 				if perr != nil {
@@ -87,41 +89,15 @@ func (d *CoreDialer) Dial(ctx context.Context, r *http.PreparedRequest) (io.Read
 					return nil, err
 				}
 				conn = wrapTLS(c, conn)
-				if c.ConnectionState().NegotiatedProtocol == "h2" {
-					// must be h2 connection if negotiated h2.
-					// if error during handshake, error it is.
-					f := h2c.NewConnection(c)
-					// [*h2c.Connection] is managed by connection pool this way
-					return f, f.Handshake()
-				}
+				// TODO: bring back http2
 			}
-			return conn, nil
+			return &http1.Conn{Conn: conn}, nil
 		},
 	)
 	if err != nil {
 		return nil, err
 	}
-	if t, ok := re.Raw().(*h2c.Connection); ok {
-		// is *tls.Conn or polyfilled TLS Connection
-		c, err := t.Stream()
-		if err == nil {
-			re.Release()
-			return (*wStream)(c), err
-		} else if ctx.Value(isRetry{}) == nil { // maybe connection fail, try dial new connection
-			return d.Dial(context.WithValue(ctx, isRetry{}, true), r)
-		}
-		return nil, err
-	}
-	return re, nil
-}
-
-type isRetry struct{}
-
-// helper
-type wStream h2c.Stream
-
-func (s *wStream) Raw() net.Conn {
-	return (*h2c.Stream)(s)
+	return re.(http.Conn), nil
 }
 
 type dialKey struct {

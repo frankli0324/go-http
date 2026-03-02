@@ -12,7 +12,7 @@ import (
 	"net/url"
 
 	"github.com/frankli0324/go-http/internal/http"
-	"github.com/frankli0324/go-http/internal/transport"
+	"github.com/frankli0324/go-http/internal/transport/http1"
 )
 
 type ProxyConfig struct {
@@ -31,10 +31,6 @@ func (c *ProxyConfig) Clone() *ProxyConfig {
 		ResolveConfig:  c.ResolveConfig.Clone(),
 	}
 }
-
-var (
-	h1Transport = transport.HTTP1{}
-)
 
 // DialContextOverProxy creates a connection over http/socks proxy.
 // This part of logic may be reused when wrapping *[CoreDialer] into
@@ -108,8 +104,19 @@ func (d *CoreDialer) DialContextOverProxy(ctx context.Context, remote, proxy *ur
 			"Proxy-Authorization": {"Basic " + base64.StdEncoding.EncodeToString([]byte(auth))},
 		}
 	}
+	c := &http1.Conn{Conn: conn}
+	if err := c.Setup(ctx); err != nil {
+		conn.Close()
+		return nil, err
+	}
+	session, err := c.Session(ctx, nil)
+	if err != nil {
+		conn.Close()
+		return nil, err
+	}
+	http1Session := session.(*http1.Session)
 	resp := &http.Response{}
-	if err := h1Transport.RoundTrip(ctx, conn, connReq, resp); err != nil {
+	if err := http1Session.Do(ctx, connReq, resp); err != nil {
 		conn.Close()
 		return nil, err
 	}

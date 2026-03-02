@@ -2,14 +2,10 @@ package internal
 
 import (
 	"context"
-	"io"
 
 	"github.com/frankli0324/go-http/internal/dialer"
 	"github.com/frankli0324/go-http/internal/http"
-	"github.com/frankli0324/go-http/internal/transport"
 )
-
-type PreparedRequest = http.PreparedRequest
 
 type Client struct {
 	dialer dialer.Dialer
@@ -37,46 +33,30 @@ func (c *Client) UseDialer(wrap func(dialer.Dialer) dialer.Dialer) {
 	}
 }
 
-func (c *Client) dial(ctx context.Context, req *PreparedRequest) (io.ReadWriteCloser, error) {
-	if c.dialer != nil {
-		return c.dialer.Dial(ctx, req)
-	}
-	return defaultDialer.Dial(ctx, req)
-}
-
-func (c *Client) transport(tlsProto string) transport.Transport {
-	if tlsProto == "http/1.1" || tlsProto == "" { // either not TLS or no protocols negotiated
-		return &transport.HTTP1{}
-	}
-	if tlsProto == "h2" {
-		return &transport.H2C{}
-	}
-	panic("not supported tls proto:" + tlsProto)
-}
-
-func (c *Client) CtxDo(ctx context.Context, req *http.Request) (*http.Response, error) {
+func (c *Client) CtxDo(ctx context.Context, req *http.Request) (resp *http.Response, err error) {
 	ctx = shadowStandardClientTrace(ctx) // get rid of the httptrace provided by standard library
 
 	pr, err := req.Prepare()
 	if err != nil {
 		return nil, err
 	}
-	conn, err := c.dial(ctx, pr)
+
+	dialer := c.dialer
+	if dialer == nil {
+		dialer = defaultDialer
+	}
+	conn, err := dialer.Dial(ctx, pr)
 	if err != nil {
 		return nil, err
 	}
-	proto := ""
-	if tls := getTLSConn(conn); tls != nil {
-		proto = tls.ConnectionState().NegotiatedProtocol
-	}
 
-	tr := c.transport(proto)
-	resp := &http.Response{}
-	if err := tr.RoundTrip(ctx, conn, pr, resp); err != nil {
+	resp = new(http.Response)
+	err = conn.Do(ctx, pr, resp)
+	if err != nil {
 		if resp.Body != nil {
 			resp.Body.Close()
 		}
-		return nil, err
+		resp = nil
 	}
-	return resp, nil
+	return resp, err
 }
